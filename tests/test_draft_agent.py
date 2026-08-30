@@ -25,8 +25,10 @@ from app.agents.draft import (
     DRAFT_CRITIC_AGENT_ID,
     DRAFT_WRITER_AGENT_ID,
     _CRITIC_INSTRUCTION,
+    _STYLE_HYPOTHESES,
     _WRITER_INSTRUCTION,
     _build_draft_context,
+    _select_style_hypothesis,
     build_draft_agent,
     run_target_through_draft,
 )
@@ -718,3 +720,120 @@ def test_critic_instruction_rejects_placeholder_salutations():
     assert "placeholder token" in _CRITIC_INSTRUCTION
     assert "invented or guessed name" in _CRITIC_INSTRUCTION
     assert "placeholder salutations" in _CRITIC_INSTRUCTION, "the severity mapping must name this class as major"
+
+
+def test_critic_instruction_sees_the_reply_and_checks_it_was_addressed():
+    """2026-08-30 fix: the critic's checklist used to have no way to catch a
+    follow-up draft that ignores the prospect's reply and re-pitches cold —
+    {follow_up_context?} was never templated into _CRITIC_INSTRUCTION, only
+    the writer's, so nothing downstream of the writer's own good intentions
+    verified it actually wrote a reply. Caught on a real production draft
+    (Therapy Partners) that passed 3/3 critic rounds while reading as a
+    fresh cold open. This asserts both halves of the fix: the critic's
+    instruction template now carries the placeholder ADK will substitute
+    the same follow_up_context state key into (the writer already reads
+    this key — no new state wiring), and checklist item 8 states the rule
+    a reviewer would expect: unaddressed reply == hard failure."""
+    assert "{follow_up_context?}" in _CRITIC_INSTRUCTION
+    assert "THE PROSPECT'S REPLY" in _CRITIC_INSTRUCTION
+    assert "8. ONLY when THE PROSPECT'S REPLY block above is non-empty" in _CRITIC_INSTRUCTION
+    assert "hard failure on this item" in _CRITIC_INSTRUCTION
+
+
+def test_a_real_first_touch_draft_run_produces_a_trace_row_the_scoreboard_can_read(conn, offers_dir):
+    """Integration check, added on review (2026-08-31): the two style-
+    hypothesis tickets were each tested in isolation — the writer-wiring
+    ticket's own tests never inspect the steps table, and the scoreboard
+    ticket's own tests hand-construct a steps row rather than ever calling
+    run_target_through_draft for real. Nothing had proven the two halves
+    actually agree on the row's shape. This runs the REAL drafting path
+    (mocked LLM agents only, same as every other test in this file) against
+    tgt_1 — a genuine first-touch target — and feeds the SAME connection
+    straight into scripts.hypothesis_scoreboard.compute_scoreboard, the
+    exact function the CLI report calls. If the two tickets had disagreed on
+    a key name or a tool_name string, this is the test that would catch it;
+    the two tickets' own unit tests could not have."""
+    # Import here, not at module scope: this is the one test in the file
+    # that depends on scripts/, which is otherwise unrelated to draft.py's
+    # own test surface.
+    from scripts.hypothesis_scoreboard import compute_scoreboard
+
+    # tgt_1 is the shared fixture target, state "scored" with a policy
+    # "allow" row (see the conn fixture above) — the ordinary first-touch
+    # precondition, no follow_up path involved, so hypothesis selection
+    # fires for real.
+    writer = _StubWriterAgent([_draft()])
+    outcome = _run_draft(conn, offers_dir, writer, _StubCriticAgent([True]))
+    assert outcome == "awaiting_review", "the draft must actually persist for there to be a trace row to check"
+
+    # The REAL trace row the REAL persist node wrote — read it exactly as
+    # compute_scoreboard does (SELECT + json.loads), not through any test
+    # helper, so this assertion is checking the real database state.
+    step_row = conn.execute(
+        "SELECT input_json FROM steps WHERE tool_name='draft_persist' AND target_id='tgt_1';"
+    ).fetchone()
+    assert step_row is not None, "the persist node must log a draft_persist step for every persisted revision"
+    input_data = json.loads(step_row["input_json"])
+    hypothesis_id = input_data.get("hypothesis_id", "")
+    # tgt_1 is a first-touch draft, so a real (non-empty) hypothesis tag
+    # must have been selected and recorded — the same tag
+    # _select_style_hypothesis would deterministically pick for "tgt_1".
+    expected_id, _ = _select_style_hypothesis("tgt_1")
+    assert hypothesis_id == expected_id, (
+        "the real persist node's logged hypothesis_id must match what "
+        "_select_style_hypothesis deterministically picks for this target_id"
+    )
+
+    # Now hand the SAME connection to the scoreboard's real aggregation
+    # function — no reply was seeded, so this target is "tested" but has no
+    # trustworthy verdict yet (neither a win nor a loss), which is the
+    # correct, honest state for a draft nobody has replied to.
+    board = compute_scoreboard(conn)
+    assert board[hypothesis_id]["tested"] == 1, (
+        "the scoreboard must count this real drafted target toward its "
+        "hypothesis's tested total — a mismatch here means the two tickets "
+        "disagree on the tool_name or the input_json key name"
+    )
+    assert board[hypothesis_id]["wins"] == 0 and board[hypothesis_id]["losses"] == 0
+
+
+# ── 13. Style hypotheses (2026-08-31, demo feature) ──────────────────────────
+
+def test_style_hypothesis_selection_is_deterministic_and_covers_the_range():
+    """The style-hypothesis selector must be deterministic (the same
+    target_id picks the same hypothesis every time — a re-run or replay of
+    a target reproduces the identical selection) and must spread across the
+    ten hand-written claims rather than collapsing onto one.  Uses
+    new_id()-shaped ids (12 lowercase hex chars, the shape app/ids.py's
+    new_id() produces) — the only shape the hex path is documented for."""
+    # Same id twice -> the identical (hypothesis_id, hypothesis_text) tuple.
+    fixed = "tgt_000000000000"
+    assert _select_style_hypothesis(fixed) == _select_style_hypothesis(fixed), (
+        "the selector must be deterministic — the same target_id, the same hypothesis"
+    )
+    # Every selection's text must be one of the ten hand-written claims —
+    # never a synthesized or out-of-set string.
+    seen_ids = set()
+    for i in range(20):  # last 4 hex chars run 0000..0013 -> indices 0..19 mod 10
+        hypothesis_id, hypothesis_text = _select_style_hypothesis(f"tgt_{i:012x}")
+        assert hypothesis_text in _STYLE_HYPOTHESES, (
+            f"selected text must be a member of _STYLE_HYPOTHESES; got {hypothesis_text!r}"
+        )
+        seen_ids.add(hypothesis_id)
+    # range(20) covers every index 0..19 exactly once, so modulo 10 yields
+    # all ten ids — assert only the lower bound so a future re-shuffle of
+    # the tuple (or a different spread) cannot break the weak claim.
+    assert len(seen_ids) >= 5, (
+        f"20 new_id-shaped ids must spread across at least 5 distinct hypotheses; got {sorted(seen_ids)}"
+    )
+
+
+def test_writer_instruction_carries_the_hypothesis_placeholder():
+    """The writer's instruction templates the style hypothesis as an
+    OPTIONAL block: {hypothesis_directive?} is substituted from session
+    state ("" on a follow-up or a pre-feature run — seeded by
+    run_target_through_draft), and the heading states the block only
+    appears on a first-touch draft, so the prompt neither renders an empty
+    heading nor leaves the writer guessing when a claim applies."""
+    assert "{hypothesis_directive?}" in _WRITER_INSTRUCTION
+    assert "STYLE HYPOTHESIS TO APPLY" in _WRITER_INSTRUCTION

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+<!-- rules.html — the one-screen rulebook (operator request, 2026-08-30):
+     the scoring formula, the policy gate, the state machine, and the
+     capability boundaries, all in one place instead of scattered across
+     eight docs/*.md files a judge is unlikely to open mid-review.
+
+     WHY THIS PAGE IS STATIC TEXT, NOT A LIVE QUERY (read this before
+     "fixing" it to import the real constants): every number below was
+     copied by hand from the real source — app/tools/score_lead.py's
+     STRONG_FIT_THRESHOLD/GOOD_FIT_THRESHOLD/WATCHLIST_THRESHOLD and
+     _SIGNAL_WEIGHTS, app/state_machine.py's VALID_TRANSITIONS, docs/
+     policy-matrix.md's P1-P9, app/agents/draft.py's
+     MAX_FOLLOW_UP_DRAFTS_PER_THREAD, app/phase1_cli.py's MAX_BATCH_SIZE —
+     and cross-checked against them on 2026-08-30 (see docs/current_status.md
+     for the exact commit). It would be MORE convenient to import those
+     constants directly and render them live. It was deliberately not done:
+     app/console/app.py's import set is an audited ALLOWLIST of exactly
+     app.db / app.review / app.kill_switch / app.console.auth, enforced by
+     an AST test that fails on any other app.* import — the same test that
+     makes "the console cannot write, even in principle" a provable claim
+     rather than a promise. Importing app.tools.score_lead or
+     app.state_machine here would be a real app.* import into console code,
+     which is exactly the class of change that test exists to catch.
+     Keeping this page static costs an occasional manual re-check when a
+     constant changes; widening the allowlist would cost the guarantee
+     itself. That trade was made on purpose. -->
+{% block title %}Rules — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Rules</h1>
+<p class="muted">The scoring formula, the policy gate, the state machine, and the capability
+boundaries this system enforces — copied by hand from the real source (file names given
+throughout) and re-checked against it, not re-derived here. This page renders no database
+query at all; it's the same class of artifact as <code>docs/policy-matrix.md</code>, just in
+one screen instead of eight files.</p>
+
+<h2>1. Lead scoring — a 0–100 formula, five sub-scores</h2>
+<p>Computed once per target by <code>score_lead</code> (<code>app/tools/score_lead.py</code>),
+immediately after research. Every sub-score is a pure function of what the research stage
+actually found — nothing here is guessed.</p>
+<table>
+  <thead><tr><th>Sub-score</th><th>Max</th><th>How it's computed</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Company fit</td>
+      <td>30</td>
+      <td>Industry identified (+10) + estimated size identified (+10) + the research LLM's
+      own confidence in the profile, scaled to 0–10.</td>
+    </tr>
+    <tr>
+      <td>Persona fit</td>
+      <td>15<span class="muted"> (spec allows 20; the "seniority sufficient" 5pts needs
+      title parsing this phase doesn't have)</span></td>
+      <td>15 if the target carries contact data (name/title from the CSV import), 0
+      otherwise — 0 is the common case, since Phase 1 has no contact-enrichment step.</td>
+    </tr>
+    <tr>
+      <td>Buying signals</td>
+      <td>25</td>
+      <td>Sum of each detected signal's strength (0.0–1.0) × its type's weight, capped at 25
+      — signal quality matters more than quantity. Weights: hiring for a related role (8),
+      a product/ops change (7), a recent launch or expansion (5), workflow-complexity
+      evidence (5).</td>
+    </tr>
+    <tr>
+      <td>Data completeness</td>
+      <td>15<span class="muted"> (10 reachable without contact data)</span></td>
+      <td>Readable website content (+5) + contact identified (+5) + verified email (+5, not
+      implemented in Phase 1 — always 0, not guessed).</td>
+    </tr>
+    <tr>
+      <td>Evidence quality</td>
+      <td>10</td>
+      <td>At least one signal AND profile confidence ≥ 0.5 (+5, a proxy for "≥2 independent
+      sources") + no detected contradiction (+5, unconditional in Phase 1 — there's no
+      multi-source enrichment yet to contradict).</td>
+    </tr>
+  </tbody>
+</table>
+<p class="muted">The five caps sum to 100, so the formula can never exceed its own scale
+without an extra clamp — the caps are the clamp. In practice a contact-less target (the common
+case) tops out around 70; even a target with full contact data tops out around 95, because
+email verification isn't built in this phase. That ceiling is stated honestly here rather than
+rounded up.</p>
+
+<h3>Fit label — what the score routes to</h3>
+<table>
+  <thead><tr><th>Score</th><th>Label</th><th>What happens next</th></tr></thead>
+  <tbody>
+    <tr><td>≥ 80</td><td><code>strong_fit</code></td><td>Stays in the active pipeline, eligible to draft.</td></tr>
+    <tr><td>≥ 60</td><td><code>good_fit</code></td><td>Stays in the active pipeline, eligible to draft.</td></tr>
+    <tr><td>≥ 40</td><td><code>watchlist</code></td><td>Routed out — insufficient signal, re-checked later.</td></tr>
+    <tr><td>&lt; 40</td><td><code>not_target</code></td><td>Routed out — below the bar, dropped from the active pipeline.</td></tr>
+  </tbody>
+</table>
+
+<h3>The LLM judge — a verdict, never a number</h3>
+<p>A second model (<code>icp_judge</code>) reviews the same evidence and may override the
+<strong>label</strong> above — but only with a written justification, or its response is
+rejected outright. Its output schema has no score field at all, so it structurally cannot
+touch the number: the policy floor below always reads the deterministic score the formula
+produced, never the judge's opinion. A judge that calls a 51-point target <code>strong_fit</code>
+changes the target's routing label, but the policy decision on that target still records a
+deny with rule <code>P4</code> — the floor holds regardless of what the judge argues.</p>
+
+<h2>2. Policy gate — nine rules, one choke point</h2>
+<p><code>policy_check</code> (<code>app/policy.py</code>) is the single place every action
+that could produce an external effect or a state change gets checked. <strong>It never fails
+silently</strong> — an action matching no rule below resolves to deny, not allow.</p>
+<table>
+  <thead><tr><th>Rule</th><th>What it enforces</th></tr></thead>
+  <tbody>
+    <tr><td>P1</td><td>No send without an operator <code>approved</code> decision — ever.</td></tr>
+    <tr><td>P2</td><td>No send to any address present in <code>suppressions</code>.</td></tr>
+    <tr><td>P3 / P3a</td><td>Required fields must be present before drafting or sending (the
+    Phase 1 variant excludes fields this phase has no enrichment to populate, e.g. verified
+    email — never silently treated as passing).</td></tr>
+    <tr><td>P4</td><td>Confidence floor: fit score &lt; 60 → deny. Draft or reply-classification
+    confidence &lt; 0.7 → routed to a human, never auto-acted.</td></tr>
+    <tr><td>P5</td><td>Reply classes <code>legal</code>, <code>complaint</code>, <code>privacy</code>,
+    <code>risky</code> always route to a human, at any confidence.</td></tr>
+    <tr><td>P6</td><td>The kill switch dominates every other rule, unconditionally, while
+    engaged. Read uncached, fail-closed — a missing or malformed switch file reads as
+    <em>engaged</em>. De-escalating actions (reject, suppress, escalate) still work while
+    engaged on purpose: the emergency stop must not also lock the operator out of the brakes.</td></tr>
+    <tr><td>P7</td><td>No autonomous re-send: a rolling-window cap on drafts, plus a hard,
+    separately-enforced cap of 2 follow-up drafts per reply thread, ever — counted directly
+    from the state-transition history, never trusted from a prompt.</td></tr>
+    <tr><td>P8</td><td>Scraped or inbound text carrying injection markers ("ignore previous",
+    oversized base64 blobs, etc.) is flagged and routed to a human rather than drafted from.
+    Inbound email is redacted before any model ever reads it.</td></tr>
+    <tr><td>P9</td><td>A field enrichment conflict (two sources disagreeing on an email or
+    title) routes to a human rather than silently picking one.</td></tr>
+  </tbody>
+</table>
+
+<h3>Underneath the numbered rules: per-agent capability enforcement</h3>
+<p>Every core-table write passes through <code>write_gate.commit()</code>, which checks three
+things before any SQL runs — a rejected write names both the agent and the action, so a
+denial is observable, never silent:</p>
+<table>
+  <thead><tr><th>Check</th><th>Refuses when</th></tr></thead>
+  <tbody>
+    <tr><td>Registered</td><td>No <code>agent_registry</code> row exists for the calling agent id.</td></tr>
+    <tr><td>Enabled</td><td>The agent's registry row has <code>enabled = 0</code> — a per-agent kill switch.</td></tr>
+    <tr><td>Authorized</td><td>The requested action isn't in that agent's own <code>allowed_actions</code> list.</td></tr>
+  </tbody>
+</table>
+<p class="muted">This is what makes an agent <em>structurally</em> unable to take an action,
+rather than merely instructed against it: the research agent handles untrusted scraped text and
+would be refused any write outside its capability set even if its own prompt were subverted.</p>
+
+<h3>The natural-language agent's four boundaries</h3>
+<p>The TaskmasterAgent (<code>python -m app.taskmaster_cli</code>) can plan and dispatch the
+whole pipeline from one sentence — but each of the following is something it cannot do,
+enforced in code and pinned by a test that fails if the capability is ever added:</p>
+<table>
+  <thead><tr><th>Boundary</th><th>Enforced by</th></tr></thead>
+  <tbody>
+    <tr><td>Cannot approve anything</td><td>Its registry row's allowed actions is the empty
+    list — even a hypothetical write attributed to it is refused by the gate before any SQL
+    runs.</td></tr>
+    <tr><td>Cannot send live email</td><td>No mail transport exists anywhere in this
+    repository — an AST test walks every module and fails if one ever appears.</td></tr>
+    <tr><td>Cannot disable the kill switch</td><td>No tool it owns references the switch's
+    writer; it may only read the switch.</td></tr>
+    <tr><td>Cannot exceed the batch cap</td><td>A natural-language batch over 15 targets is
+    refused deterministically, in code, before any database or file I/O — the model can
+    report the cap, never negotiate it.</td></tr>
+  </tbody>
+</table>
+
+<h2>3. State machine — every valid move, nothing implicit</h2>
+<p>No component transitions a target directly — every change goes through
+<code>state_machine.transition()</code>, validated against a fixed table
+(<code>app/state_machine.py</code>). A transition not in this table is refused; there is no
+LLM-decided or implicit state change anywhere in this system.</p>
+
+<h3>The 16 states</h3>
+<p>
+<code>new</code> → <code>enriched</code> / <code>researched</code> → <code>scored</code> →
+<code>drafted</code> → <code>awaiting_review</code> → <code>approved</code> →
+<code>sent</code> / <code>dry_run_sent</code> → <code>replied</code> → <code>routed</code>,
+with <code>watchlist</code>, <code>not_target</code>, <code>bounced</code>,
+<code>suppressed</code>, and <code>failed</code> as the exits along the way.
+</p>
+
+<h3>The path a target actually takes</h3>
+<table>
+  <thead><tr><th>Stage</th><th>From → To</th><th>Trigger</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="3">Research &amp; score</td><td><code>new → researched</code></td><td>Research succeeds</td></tr>
+    <tr><td><code>researched → scored</code></td><td>Scoring succeeds</td></tr>
+    <tr><td><code>scored → drafted</code></td><td>Policy allows a draft (P3a + P4 pass)</td></tr>
+    <tr><td rowspan="2">Routed away</td><td><code>scored → watchlist</code></td><td>Insufficient signal</td></tr>
+    <tr><td><code>scored → not_target</code></td><td>Non-ICP or missing critical fields</td></tr>
+    <tr><td rowspan="4">Review</td><td><code>drafted → awaiting_review</code></td><td>Draft complete</td></tr>
+    <tr><td><code>awaiting_review → approved</code></td><td>Operator approves</td></tr>
+    <tr><td><code>awaiting_review → not_target</code></td><td>Operator rejects</td></tr>
+    <tr><td><code>awaiting_review → researched</code></td><td>Operator escalates for more research</td></tr>
+    <tr><td rowspan="2">Send</td><td><code>approved → sent</code></td><td>Send gate passes, LIVE mode</td></tr>
+    <tr><td><code>approved → dry_run_sent</code></td><td>Send gate passes, DRY_RUN mode</td></tr>
+    <tr><td rowspan="3">Reply</td><td><code>sent / dry_run_sent → replied</code></td><td>An inbound (or simulated) reply is linked</td></tr>
+    <tr><td><code>replied → routed</code></td><td>Classifier verdict + router decision</td></tr>
+    <tr><td><code>routed → drafted</code></td><td>A positive reply queues a real follow-up draft</td></tr>
+    <tr><td rowspan="3">Terminal</td><td><code>routed → suppressed</code></td><td>Reply class is unsubscribe</td></tr>
+    <tr><td><code>bounced → suppressed</code></td><td>Hard bounce, automatic</td></tr>
+    <tr><td><code>any state → suppressed / failed</code></td><td>An address lands in the suppression list, or an unrecoverable error — reachable from every state, not one hop from a fixed origin</td></tr>
+  </tbody>
+</table>
+
+{% endblock %}

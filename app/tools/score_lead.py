@@ -173,24 +173,33 @@ def _evidence_quality_score(signals: list[Signal], profile: CompanyProfile) -> i
     return score
 
 
+# ── Fit-label thresholds ─────────────────────────────────────────────────────
+# Named module-level constants (2026-08-30 — pulled out of _fit_label's body
+# so a reader elsewhere in the repo, e.g. the console's /rules page, can
+# import the real numbers instead of hand-copying them into prose that can
+# silently drift out of sync with the code). Values unchanged from
+# docs/scoring-rules.md §4 — this is a naming refactor, not a policy change.
+STRONG_FIT_THRESHOLD = 80  # >= this: strong_fit — high-confidence ICP match, ready for drafting
+GOOD_FIT_THRESHOLD = 60  # >= this: good_fit — meets the policy floor (P4) for draft consideration
+WATCHLIST_THRESHOLD = 40  # >= this: watchlist — interesting but insufficient signal; re-check later
+# < WATCHLIST_THRESHOLD: not_target — below the bar; drop from active pipeline
+
+
 def _fit_label(score: int) -> str:
     """Map a 0–100 fit_score to one of four fit labels.
 
-    Thresholds are copied verbatim from docs/scoring-rules.md §4:
-      - ≥80: strong_fit — high-confidence ICP match, ready for drafting
-      - ≥60: good_fit — meets the policy floor for draft consideration
-      - ≥40: watchlist — interesting but insufficient signal; re-check later
-      - <40: not_target — below the bar; drop from active pipeline
+    Thresholds are the module-level constants above, copied verbatim from
+    docs/scoring-rules.md §4.
 
     These thresholds are the routing decision: strong/good stay at scored
     (later phases will draft from there), watchlist and not_target route the
     target away from the active pipeline.
     """
-    if score >= 80:
+    if score >= STRONG_FIT_THRESHOLD:
         return "strong_fit"
-    if score >= 60:
+    if score >= GOOD_FIT_THRESHOLD:
         return "good_fit"
-    if score >= 40:
+    if score >= WATCHLIST_THRESHOLD:
         return "watchlist"
     return "not_target"
 

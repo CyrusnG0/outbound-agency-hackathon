@@ -70,6 +70,11 @@ proposed meeting time — has **no field in the model's own output schema**. It 
 code, after the model runs, every time. A model cannot omit or mangle what it was never asked
 to write.
 
+The deployed console has a `/rules` page — the scoring formula, all nine policy rules, and the
+full state-transition table, in one screen. It's hand-verified static text rather than a live
+import on purpose: importing the real constants would mean widening the console's own audited
+zero-write-path import allowlist, and that guarantee was worth more than the convenience.
+
 ## Real reply handling and real scheduling
 
 A reply routes to exactly one of nine outcomes: positive replies queue a follow-up draft;
@@ -83,6 +88,21 @@ taken, and handed to an LLM agent as a short list of real openings. The agent pi
 states why. Code looks that choice up against the same list it offered — a slot the agent
 didn't actually see, or one another run just took, is refused before anything is written. The
 email's footer then states a real proposed time, never a placeholder.
+
+## Measuring what actually works, without pretending to learn from it
+
+Every first-touch draft is deterministically assigned one of ten hand-written style hypotheses
+(tone, structure, CTA style) — never LLM-generated, never random, a pure function of the
+target so a run is reproducible. `scripts/hypothesis_scoreboard.py` computes each hypothesis's
+real win/loss record by reading the reply router's own trusted verdict, never a raw
+classification the router itself didn't act on — the same confidence-floor discipline that
+governs every other decision in this system governs this measurement too.
+
+What it deliberately does **not** do: feed that score back into which hypothesis gets tried
+next. Selection stays a pure function of the target, unaffected by outcomes. Outcome-linked
+re-weighting — with the guardrails a responsible version needs (bounded weights, no
+drop-to-zero without a human, a full audit trail) — is specified but not built. A learning loop
+without its guardrails is worse than no learning loop at all.
 
 ## Architecture
 
@@ -110,7 +130,7 @@ email's footer then states a real proposed time, never a placeholder.
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 778 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 789 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -162,7 +182,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `778 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `789 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):

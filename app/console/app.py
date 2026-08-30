@@ -276,6 +276,17 @@ def _fetch_target_detail(conn: Conn, target_id: str) -> dict[str, Any] | None:
 # "why" is fixed narration text written once here, not read from the database: it is
 # the demo page's own commentary on real, already-verified rows, not a claim about
 # what the pipeline computed.
+#
+# "Mark Boyden Associates" removed 2026-08-30: its real follow-up draft was written
+# BEFORE the real scheduling feature existed, when the therapy-app offer still carried
+# the old static `booking_url` (a claude.ai link) — its stored footer still states that
+# link, and the footer column is deliberately immutable outside a fresh drafting pass
+# (B3-Z1: never operator- or LLM-edited). The target can't be redrafted either — it's
+# state="awaiting_review", and run_target_through_draft only accepts "scored" or
+# "routed". Delisting here (so nothing links to /review/{its target_id} from this page)
+# plus rejecting the stale draft in the review console (an ordinary operator decision,
+# recorded the normal way) is the fix; Solacetree already covers the same "positive
+# reply -> follow-up draft" story with a footer built by the real scheduler.
 _SHOWCASE_TARGETS = [
     (
         "MindnLife",
@@ -288,12 +299,6 @@ _SHOWCASE_TARGETS = [
         "Scored strong_fit by the deterministic formula. The LLM judge overruled it: "
         "the company is in Victoria, Australia, and the ICP is Hong Kong only — a "
         "disqualifier the formula's fields never checked.",
-    ),
-    (
-        "Mark Boyden Associates",
-        "A real positive reply, classified 0.98 confidence, routed to "
-        "queue_follow_up_draft — the real second draft is that follow-up, "
-        "still waiting on human approval like every send in this system.",
     ),
     (
         "Focus2 Intelligent Therapy",
@@ -313,7 +318,7 @@ _SHOWCASE_TARGETS = [
 
 
 def _fetch_demo_showcase(conn: Conn) -> dict[str, Any]:
-    """Assemble the one-screen demo page: the five showcase targets from the
+    """Assemble the one-screen demo page: the four showcase targets from the
     real batch (each linked to its real console page, never re-rendered
     here) plus the most recently reserved real meeting and the follow-up
     draft whose footer states it.
@@ -1071,7 +1076,7 @@ def create_app() -> FastAPI:
 
     @app.get("/demo")
     def demo_showcase(request: Request, conn: Conn = Depends(get_conn)) -> HTMLResponse:
-        # One screen for the moments worth showing a judge: links to the five
+        # One screen for the moments worth showing a judge: links to the four
         # real showcase targets (never re-queried in depth here — each links
         # out to its own real /targets or /review page for the full audit
         # trail) and the most recently reserved real meeting plus the
@@ -1089,6 +1094,24 @@ def create_app() -> FastAPI:
                 "replay_mode": _replay_mode(),
             }
         )
+
+    @app.get("/rules")
+    def rules(request: Request) -> HTMLResponse:
+        # The one-screen rulebook (operator request, 2026-08-30): the scoring
+        # formula, the policy gate, the state machine, and the capability
+        # boundaries, in one place instead of eight docs/*.md files a judge
+        # is unlikely to open. NO conn dependency at all — this route opens
+        # no database connection, because the page renders no query: every
+        # number in rules.html was copied by hand from the real source and
+        # cross-checked against it (see the template's own header comment
+        # for exactly which files and why this isn't a live import instead —
+        # short version: importing app.tools.score_lead or app.state_machine
+        # here would be a real app.* import into console code, which is
+        # precisely what the console's audited import allowlist test exists
+        # to catch). No demo_data/replay_mode banners either — those flag
+        # whether TARGET DATA on a page is seeded or replayed, and this page
+        # shows no target data at all.
+        return templates.TemplateResponse(request, "rules.html", {})
 
     @app.get("/targets/{target_id}")
     def target_detail(

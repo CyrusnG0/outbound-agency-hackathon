@@ -403,14 +403,14 @@ def test_api_unknown_target_is_404(client):
 
 def test_demo_page_degrades_cleanly_when_no_showcase_names_match(client):
     # The base db_path fixture seeds "Acme Therapeutics", not any of the
-    # five hardcoded showcase company names — this proves the
+    # four hardcoded showcase company names — this proves the
     # mark-don't-drop path: a showcase name absent from the database
     # renders an explicit "not available" cell instead of a KeyError/500,
     # and the meeting/draft sections render their own explicit empty
     # states when no meetings row exists at all.
     resp = client.get("/demo")
     assert resp.status_code == 200
-    assert resp.text.count("not available in this database") == 5
+    assert resp.text.count("not available in this database") == 4
     assert "No meeting reserved in this database yet" in resp.text
     assert "No follow-up draft found for this meeting's target" in resp.text
 
@@ -501,8 +501,72 @@ def test_demo_page_shows_real_showcase_links_and_scheduled_meeting(client, db_pa
     assert "We&#39;ve held" in resp.text or "We've held" in resp.text
     # The removed artifact link must never resurface anywhere on this page.
     assert "claude.ai" not in resp.text
-    # Four showcase names still don't resolve in this database.
-    assert resp.text.count("not available in this database") == 4
+    # Three showcase names still don't resolve in this database.
+    assert resp.text.count("not available in this database") == 3
+
+
+def test_demo_page_no_longer_lists_mark_boyden_associates(client):
+    # 2026-08-30: Mark Boyden Associates was pulled from _SHOWCASE_TARGETS
+    # (app/console/app.py) because its real follow-up draft predates the
+    # real scheduling feature and its stored footer still states the old
+    # claude.ai artifact link — a link the footer column can never be
+    # silently rewritten to fix (B3-Z1: footers are never operator- or
+    # LLM-edited outside a fresh drafting pass). Delisting it here is one
+    # half of the fix (the other half is rejecting the stale draft in the
+    # live database, an ordinary operator review decision, not a code
+    # change). This test locks the delisting in so the name can't silently
+    # reappear in a future edit of the showcase list.
+    resp = client.get("/demo")
+    assert resp.status_code == 200
+    assert "Mark Boyden Associates" not in resp.text
+
+
+# ── /rules: the one-screen rulebook (operator request, 2026-08-30) ────────────
+
+
+def test_rules_page_renders_the_scoring_formula_policy_gate_and_state_machine(client):
+    # No seeded data needed — the page is static text (see rules.html's own
+    # header comment for why it's not a live query of the real constants).
+    # This test is a content smoke check: every number here must match the
+    # real source it claims to describe, so a future change to
+    # score_lead.py's thresholds/weights, state_machine.py's transitions, or
+    # docs/policy-matrix.md's rules WITHOUT a matching edit here is exactly
+    # the drift this test exists to catch.
+    resp = client.get("/rules")
+    assert resp.status_code == 200
+    # Scoring: the fit-label thresholds (score_lead.py's
+    # STRONG_FIT_THRESHOLD/GOOD_FIT_THRESHOLD/WATCHLIST_THRESHOLD) and the
+    # signal weights (_SIGNAL_WEIGHTS).
+    assert "strong_fit" in resp.text and "not_target" in resp.text
+    assert "80" in resp.text and "60" in resp.text and "40" in resp.text
+    assert "hiring for a related role (8)" in resp.text
+    # Policy: all nine numbered rules present, plus the kill switch's
+    # fail-closed behaviour and the Taskmaster's batch cap.
+    for rule in ("P1", "P2", "P4", "P5", "P6", "P7", "P8", "P9"):
+        assert f">{rule}<" in resp.text, f"rule {rule} missing from /rules"
+    assert ">P3 / P3a<" in resp.text, "rule P3/P3a missing from /rules"
+    assert "engaged" in resp.text and "15 targets" in resp.text
+    # State machine: a sample of real transitions from VALID_TRANSITIONS
+    # (app/state_machine.py), not paraphrased.
+    assert "scored → drafted" in resp.text
+    assert "routed → drafted" in resp.text
+    assert "bounced → suppressed" in resp.text
+
+
+def test_rules_page_opens_no_database_connection(tmp_path, monkeypatch):
+    # Same pattern as test_health_returns_ok_without_touching_database: point
+    # OUTBOUND_DB_TARGET at a path whose parent directory doesn't even
+    # exist, so touching the database at all (even a failed connect attempt
+    # sqlite would auto-create) would blow up. /rules has no `conn`
+    # dependency in its route signature at all — this proves it behaviourally,
+    # not just by reading the route's argument list.
+    nonexistent = str(tmp_path / "no_such_dir" / "no_such.db")
+    monkeypatch.setenv("OUTBOUND_DB_TARGET", nonexistent)
+    monkeypatch.setenv("OUTBOUND_CONSOLE_API_KEY", _CONSOLE_TEST_SECRET)
+    monkeypatch.delenv("OUTBOUND_REPLAY_MODE", raising=False)
+    resp = _AuthedTestClient(app).get("/rules")
+    assert resp.status_code == 200
+    assert "strong_fit" in resp.text
 
 
 # ── Structural tests: the console cannot write, even in principle ─────────────
