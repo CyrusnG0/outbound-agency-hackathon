@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+<!-- demo.html — the one-screen jumping-off point for a live demo (operator
+     request, 2026-08-30): direct links to the five real showcase moments
+     from the 2026-08-29/30 batch, plus the most recently reserved REAL
+     meeting (app/tools/schedule_meeting.py) and the follow-up draft whose
+     footer states it. Nothing here is computed on this page — every fact
+     is a SELECT against the same tables every other console page reads,
+     and every link lands on the real /targets or /review page for that
+     target. This page exists so the operator does not have to hunt for
+     target ids live on camera. -->
+{% block title %}Demo — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Demo</h1>
+<p class="muted">Direct links to the real moments worth showing, and the real scheduled meeting reserved for a real follow-up draft — nothing on this page is staged, everything below is a live read of the same database every other screen reads.</p>
+
+<!-- Section 1: the five showcase targets. Each row is either a completed
+     target (links to its full audit trail) or one still awaiting a human
+     decision (links straight to the review/decision screen — the more
+     useful page for something not yet resolved). A showcase name that
+     doesn't resolve in this database renders as "not available", the same
+     mark-don't-drop rule the signals table already follows — never a
+     crash, never a silently missing row. -->
+<h2>Showcase targets</h2>
+<table>
+  <thead>
+    <tr><th>Company</th><th>State</th><th>Why it matters</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for s in showcase %}
+    <tr>
+      <td>{{ s.company_name }}</td>
+      <td>{{ s.state if s.state is not none else "—" }}</td>
+      <td>{{ s.why }}</td>
+      <td>
+        {% if s.target_id is none %}
+        <span class="empty">not available in this database</span>
+        {% elif s.state == "awaiting_review" %}
+        <a href="/review/{{ s.target_id }}">Open review →</a>
+        {% else %}
+        <a href="/targets/{{ s.target_id }}">Open audit trail →</a>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<!-- Section 2: the real scheduled meeting. Found by "the newest
+     non-cancelled row in meetings" (app/console/app.py), never a
+     hardcoded company or target id — company_name/reasoning are LLM-
+     touched text (the scheduler's own justification for the slot it
+     picked) and render exactly like every other LLM-derived field in the
+     console: autoescape ON, no |safe anywhere. -->
+<h2>The real scheduled meeting</h2>
+{% if meeting %}
+<table>
+  <tr><th>Company</th><td>{{ meeting.company_name }}</td></tr>
+  <tr><th>Contact</th><td>{{ meeting.contact_name if meeting.contact_name is not none else "—" }}</td></tr>
+  <tr><th>Scheduled at</th><td>{{ meeting.scheduled_at }}</td></tr>
+  <tr><th>Duration</th><td>{{ meeting.duration_minutes }} minutes</td></tr>
+  <tr><th>Scheduler's reasoning</th><td>{{ meeting.reasoning if meeting.reasoning is not none else "—" }}</td></tr>
+</table>
+<p class="muted">Reserved against a real computed calendar — a fixed weekly template projected forward from "now" and checked against every other non-cancelled row in this same table, so two targets can never collide on one slot. The LLM picked which open slot to propose and why; deterministic code re-validated the pick was still free before writing it.</p>
+{% else %}
+<p class="empty">No meeting reserved in this database yet.</p>
+{% endif %}
+
+<!-- Section 3: the real follow-up draft that STATES the reservation
+     above — the same target_id the meeting row carries, not a footer-text
+     search. subject/body/footer are LLM-and-code output rendered exactly
+     like every other draft view in the console: autoescape ON, no |safe
+     anywhere. -->
+<h2>The follow-up draft</h2>
+{% if meeting_draft %}
+<table>
+  <tr><th>Subject</th><td>{{ meeting_draft.subject }}</td></tr>
+  <tr><th>Revision</th><td>{{ meeting_draft.revision_number }}</td></tr>
+  <tr><th>Created</th><td class="muted">{{ meeting_draft.created_at }}</td></tr>
+</table>
+<h3>Body</h3>
+<pre>{{ meeting_draft.body }}</pre>
+<h3>Footer (deterministic — not authored by the model)</h3>
+<pre>{{ meeting_draft.footer }}</pre>
+<p class="muted">Full draft diff across every revision, plus the critique that produced this one: <a href="/review/{{ meeting.target_id }}">open the review screen</a>.</p>
+{% else %}
+<p class="empty">No follow-up draft found for this meeting's target.</p>
+{% endif %}
+{% endblock %}

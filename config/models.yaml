@@ -1,0 +1,39 @@
+# Model-role aliases for the outbound-agency pipeline.
+#
+# Each value is a {provider}.{role} alias — NOT an env var name directly.
+# _resolve_model in app/llm.py derives the actual env var name from it by
+# uppercasing and replacing dots with underscores, then appending _MODEL.
+# Example: "gemini.flash" -> env var "GEMINI_FLASH_MODEL".
+#
+# If the env var is unset, the system refuses to boot — it never silently
+# falls back to an SDK default model.
+#
+# Current pin (2026-08-17, see docs/superpowers/plans/2026-08-17-google-agentic-port.md):
+# all roles route through Gemini — a hard requirement of the Google
+# hackathon submission. DeepSeek remains supported in app/llm.py as a
+# legacy/fallback provider; switch back by repointing these aliases to
+# deepseek.v4_flash and setting DEEPSEEK_V4_FLASH_MODEL. The provider prefix
+# ("gemini" here) is what app/llm.py's call_structured reads to pick the right
+# API client config — it must be one of the providers call_structured actually
+# knows how to construct a client for ("anthropic", "deepseek", or "gemini").
+research_model: gemini.flash
+draft_model: gemini.flash
+reply_classifier_model: gemini.flash
+injection_scan_model: gemini.flash
+# judge_model (plan task B2c): the ICP judge's role alias — kept as its OWN
+# role (not folded into research_model) so the operator can pin a different
+# model for the judgement call than for extraction, and so the registry row
+# for agent "icp_judge" can name exactly this alias as its model_alias.
+judge_model: gemini.flash
+# taskmaster_model (plan task C4): the TaskmasterAgent root's role alias —
+# its OWN role (not folded into any stage role) so the operator can repin
+# the planning agent independently of the research/draft/judge pins, and so
+# the registry row for agent "taskmaster" can name exactly this alias as
+# its model_alias (docs/agents.md).
+taskmaster_model: gemini.flash
+# scheduling_model (demo, 2026-08-30): the meeting-scheduling agent's role
+# alias — its OWN role for the same reason as judge_model/taskmaster_model:
+# so the operator can pin a different model for slot selection than for
+# drafting/judging without touching either, and so the registry row for
+# agent "meeting_scheduler" can name exactly this alias as its model_alias.
+scheduling_model: gemini.flash

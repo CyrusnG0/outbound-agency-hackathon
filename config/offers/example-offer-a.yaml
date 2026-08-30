@@ -1,0 +1,6 @@
+# Example offer A — mental health practice intake automation.
+# This is an example/reference config, not production data.
+pitch: "We help mental health practices cut intake admin time in half."
+persona_hint: "Operations or clinical lead at a mid-size practice."
+template: "default_outreach_v1"
+from_address: "outreach@example-a.test"

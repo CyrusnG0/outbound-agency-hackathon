@@ -1,0 +1,4 @@
+pitch: "AI agent safety tooling for teams running autonomous workflows."
+persona_hint: "Eng lead or security-adjacent role."
+template: "default_outreach_v1"
+from_address: "outreach@ai-security.test"

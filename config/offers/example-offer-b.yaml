@@ -1,0 +1,6 @@
+# Example offer B — AI agent safety tooling.
+# This is an example/reference config, not production data.
+pitch: "AI agent safety tooling for teams running autonomous workflows."
+persona_hint: "Eng lead or security-adjacent role at a company running AI agents."
+template: "default_outreach_v1"
+from_address: "outreach@example-b.test"

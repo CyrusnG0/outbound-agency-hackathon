@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+<!-- review_queue.html — the approval queue (ticket B4b): everything in
+     awaiting_review, newest first, one link per target to its review
+     screen.  This is the sole approval channel in v1 (docs/human-review.md
+     §4): every decision is recorded through the review screen's form, via
+     app/review.py.  All values autoescaped — no |safe anywhere. -->
+{% block title %}Review queue — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Review queue</h1>
+
+<!-- The kill switch is ALWAYS visible on the review surface: an engaged
+     switch refuses approve/approve_with_edits (P6) but still allows the
+     de-escalating decisions — the operator needs to see its state before
+     deciding anything. -->
+{% include "kill_switch_block.html" %}
+
+{% if targets %}
+<!-- One row per pending target; the id links to the full review screen. -->
+<table>
+  <thead>
+    <tr>
+      <th>Target</th>
+      <th>Company</th>
+      <th>Entered review</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in targets %}
+    <tr>
+      <td><a href="/review/{{ t.target_id }}"><code>{{ t.target_id }}</code></a></td>
+      <td>{{ t.company_name }}</td>
+      <td class="muted">{{ t.updated_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<!-- An empty queue is the healthy steady state — say so, and point at the
+     pipeline that fills it. -->
+<p class="empty">Nothing awaiting review. Run the draft stage (<code>python -m app.draft_cli</code>) to move scored targets into the queue.</p>
+{% endif %}
+{% endblock %}

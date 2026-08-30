@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+<!-- targets.html — the index: every target, newest-updated first (the
+     ordering happens in SQL in app/console/app.py, not here). -->
+{% block title %}Targets — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Targets</h1>
+{% if targets %}
+<!-- One row per target; the target id links to its full audit-trail page. -->
+<table>
+  <thead>
+    <tr>
+      <th>Target</th>
+      <th>Company</th>
+      <th>Offer</th>
+      <th>State</th>
+      <th>Score</th>
+      <th>Recommendation</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in targets %}
+    <tr>
+      <td><a href="/targets/{{ t.target_id }}"><code>{{ t.target_id }}</code></a></td>
+      <td>{{ t.company_name }}</td>
+      <td>{{ t.offer_slug }}</td>
+      <td>{{ t.state }}</td>
+      <td>{{ t.score if t.score is not none else "—" }}</td>
+      <td>{{ t.final_recommendation if t.final_recommendation is not none else "—" }}</td>
+      <td class="muted">{{ t.updated_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<!-- Empty database: a readable pointer to the CLI, not a blank screen. -->
+<p class="empty">No targets yet. Import and research a batch with the Phase 1 CLI (<code>python -m app.phase1_cli --csv &lt;file&gt;</code>) and targets will appear here.</p>
+{% endif %}
+{% endblock %}

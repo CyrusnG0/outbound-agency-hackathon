@@ -1,0 +1,177 @@
+<!doctype html>
+<!-- base.html — the shared shell for the operator console (ticket A5a).
+     One inline <style> block, no external CSS/JS/CDN: the console renders
+     fast, works offline, and loads nothing from third parties (consistent
+     with the threat model in docs/threat-model.md). -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Mobile-friendly width so the demo reads well on whatever device it is filmed on. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Outbound Agency Console{% endblock %}</title>
+  <style>
+    /* Plain, semantic, legible — this page is filmed, so readability and
+       load speed matter more than styling. */
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #1a1d21; }
+    .site-header { display: flex; align-items: center; gap: 1rem; padding: .75rem 1.5rem; background: #1a1d21; color: #ffffff; }
+    .site-header a { color: #ffffff; text-decoration: none; font-weight: 600; }
+    .readonly-badge { font-size: .75rem; padding: .2rem .5rem; border-radius: 3px; background: #2f6f4f; color: #ffffff; }
+    main { max-width: 1080px; margin: 0 auto; padding: 1.5rem; }
+    h1 { margin-top: 0; }
+    h2 { margin-top: 2rem; border-bottom: 2px solid #d8dde3; padding-bottom: .25rem; }
+    h3 { margin-top: 1.5rem; }
+    table { border-collapse: collapse; width: 100%; background: #ffffff; }
+    th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #e3e6ea; vertical-align: top; }
+    th { background: #eef1f4; font-weight: 600; }
+    pre { background: #ffffff; border: 1px solid #e3e6ea; padding: .75rem; overflow-x: auto; font-size: .85rem; white-space: pre-wrap; }
+    .muted { color: #5b6470; }
+    .empty { color: #5b6470; }
+    /* B2c: the divergence block — a judge overriding the deterministic
+       score is the most interesting event on the page, so it gets a
+       border and accent the plain audit tables do not have. */
+    .divergence { border: 2px solid #c0682a; background: #fff7ef; padding: .5rem .75rem; margin: 1rem 0; }
+    .divergence h3 { margin-top: .25rem; color: #8a4a1c; }
+    /* D3a: the DEMO DATA banner — unmissable by design (amber, bold,
+       full-width, above every piece of content): the operator must never
+       mistake seeded placeholder contacts and gate results for real
+       verified data.  Rendered only when the route detected the demo
+       seed marker (a SELECT in app/console/app.py). */
+    .demo-banner { background: #b45309; color: #ffffff; font-weight: 700; text-align: center; padding: .6rem 1rem; }
+    /* D1: the REPLAY MODE banner — a real, previously recorded run is being
+       replayed offline (scripts/demo_replay.sh serves a disposable copy of
+       data/e2e_run2.db), so this is deliberately NOT the amber "placeholder"
+       banner above: the data is REAL, only the computation is not happening
+       live.  Blue, bold, full-width, above every piece of content — rendered
+       only when the route read OUTBOUND_REPLAY_MODE=1 (a PURE env read in
+       app/console/app.py, no database query). */
+    .replay-banner { background: #1e3a5f; color: #ffffff; font-weight: 700; text-align: center; padding: .6rem 1rem; }
+    /* U3: the review-queue count badge — a decision is waiting, so it uses the
+       same amber "needs attention" family as the .divergence block and the run
+       view's .state-awaiting_review badge, for visual consistency across the
+       console.  .review-queue-badge sets no display property today (a span
+       inside the header link, whose parent <a> is display:block — not a flex
+       item of .site-header), so the UA's own [hidden] { display: none } rule
+       already applies on its own.  The explicit rule below is defensive
+       future-proofing: if a display property is ever added to the class, an
+       author display would otherwise beat the UA rule. */
+    .review-queue-badge { font-weight: 700; background: #fde3c8; color: #8a4a1c; border-radius: 3px; padding: .1rem .45rem; margin-left: .5rem; }
+    .review-queue-badge[hidden] { display: none; }
+    code { background: #eef1f4; padding: .1rem .3rem; border-radius: 3px; }
+    a { color: #1a5fb4; }
+  </style>
+</head>
+<body>
+  <!-- Every value rendered below passes through Jinja autoescape (a security
+       control, verified in app/console/app.py): LLM output derived from
+       scraped web pages renders as inert text, never as executable markup. -->
+  <header class="site-header">
+    <a href="/">Outbound Agency Console</a>
+    <!-- B4b: the badge no longer claims read-only — the console has exactly
+         ONE write door (the review gate in app/review.py, plus the
+         kill-switch toggle).  Everything else is still SELECT-only. -->
+    <span class="readonly-badge">review gate</span>
+    <!-- U3: the Review queue link is now a LIVE badge.  The inline poll script
+         at the end of the body updates #review-queue-count (textContent only)
+         with the number of targets awaiting review; the badge is hidden while
+         zero so the link reads as a plain link, and the tab title gains a
+         "(N)" prefix while a decision is waiting. -->
+    <!-- Operator-requested (2026-08-30): a direct link to the one-screen
+         demo page, so a live walkthrough never has to hunt for a target id
+         mid-recording. Sits before the review-queue link, which keeps its
+         own margin-left:auto so both stay right-aligned. -->
+    <a href="/demo" style="margin-left: auto;">Demo</a>
+    <a href="/review/queue">Review queue<span id="review-queue-count" class="review-queue-badge" hidden></span></a>
+  </header>
+  <!-- D3a: the seeded-database indicator.  demo_data is passed by the
+       routes that set it; templates that don't receive it render nothing
+       (Jinja treats the undefined name as falsy in an if-block). -->
+  {% if demo_data %}
+  <div class="demo-banner">DEMO DATA — placeholder contacts and gate results. No real verification or injection/policy scan ran; the gates themselves are genuine.</div>
+  {% endif %}
+  <!-- D1: the replay-mode indicator.  replay_mode is passed by the routes that
+       set it (a pure env-var read of OUTBOUND_REPLAY_MODE — NO database query)
+       when the console is serving scripts/demo_replay.sh: an OFFLINE REPLAY of
+       a real, previously recorded pipeline run (data/e2e_run2.db, served from
+       a disposable copy).  This data is REAL — not the demo_seed placeholders
+       above — so it gets its OWN, visually distinct blue banner, and the page
+       must never be mistaken for a live computation.  It renders ALONGSIDE
+       (never instead of) the demo_data banner: the two flags are independent
+       and must never suppress each other. -->
+  {% if replay_mode %}
+  <div class="replay-banner">REPLAY MODE — this is a REPLAY of a real, previously recorded pipeline run. Nothing on this page is computing live.</div>
+  {% endif %}
+  <main>
+  {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      // ── U3: the site-wide "a decision is waiting" notification ──
+      // This script lives in base.html on purpose: EVERY page in the console
+      // extends this template, so the header badge below reflects the review
+      // queue no matter where the judge is looking when a target reaches
+      // awaiting_review (the single most important demo beat — the pipeline
+      // stops there and will not proceed).  It polls a CHEAP, count-only
+      // endpoint (GET /api/review/queue/count — a single SELECT, NOT the full
+      // review payload) on an interval and renders the count via textContent.
+      //
+      // textContent-only discipline, the same non-negotiable rule U2
+      // established: this script renders an integer today, but a future editor
+      // extending the badge to show more must inherit a script that is already
+      // safe by construction.  No string-as-HTML DOM setter or parser, ever —
+      // if it looks like an inner-HTML assignment or an adjacent-insertion
+      // call, it does not belong here.
+
+      var POLL_INTERVAL_MS = 10000;  // 10s: a persistent, ambient, site-wide poll — slower than U2's 2s live-run view, cheap enough to run on every open page
+
+      // The page's ORIGINAL title, captured ONCE at load (before any
+      // modification).  Every page renders a different <title> via its own
+      // Jinja title block, so the baseline is read from document.title, never
+      // hardcoded.  All title updates below are computed FROM THIS STORED
+      // VALUE, never from document.title itself: a naive "(N) " + document.title
+      // on every poll would stack prefixes across repeated polls ("(3) (3) (2)
+      // Outbound Agency Console").
+      const ORIGINAL_TITLE = document.title;
+
+      var countEl = document.getElementById("review-queue-count");
+
+      function renderCount(count) {
+        if (count > 0) {
+          // A decision is waiting: show the badge and prefix the tab title.
+          countEl.textContent = count;      // textContent ONLY — see the top comment
+          countEl.hidden = false;
+          document.title = "(" + count + ") " + ORIGINAL_TITLE;
+        } else {
+          // Nothing pending: the link reads as a plain link (no "0" badge —
+          // noise) and the title is restored to the stored original.
+          countEl.textContent = "";
+          countEl.hidden = true;
+          document.title = ORIGINAL_TITLE;
+        }
+      }
+
+      function poll() {
+        fetch("/api/review/queue/count")
+          .then(function (resp) { return resp.json(); })
+          .then(function (data) {
+            renderCount(data.count);
+            setTimeout(poll, POLL_INTERVAL_MS);
+          })
+          .catch(function () {
+            // A transient fetch failure must not kill the loop (U2's .catch()
+            // resilience pattern): log/ignore and retry on the next interval.
+            // This badge has NO max-poll safety valve, unlike U2's run view —
+            // it should keep polling for as long as the page is open, the same
+            // way an email client's unread-count badge does.
+            setTimeout(poll, POLL_INTERVAL_MS);
+          });
+      }
+
+      // Render immediately (a badge that already exists shows on first paint),
+      // then poll on the interval.
+      poll();
+    })();
+  </script>
+</body>
+</html>

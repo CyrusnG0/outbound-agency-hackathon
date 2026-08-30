@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+<!-- review_target.html — one target's approval screen (ticket B4b): the
+     full review payload (research summary, ICP verdict, signals, policy
+     decision, risk flags, suppression status) and EVERY draft revision in
+     order with the critique that produced each — the "draft diff across
+     iterations" from the plan row.  The five decision actions POST to
+     /review/{target_id}/decision, which records through app/review.py.
+
+     SECURITY: draft bodies and critiques are LLM output derived from
+     scraped third-party pages (policy rule P8).  Jinja autoescape is a
+     security control here — there is NO |safe anywhere in this file, for
+     any reason, and tests/test_console.py proves a stored <script> renders
+     as inert escaped text. -->
+{% block title %}Review {{ review.target.target_id }} — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Review <code>{{ review.target.target_id }}</code></h1>
+
+{% include "kill_switch_block.html" %}
+
+<!-- The post-decision banner: a recorded decision (redirect from the form)
+     or a refusal with the reason.  A refusal is a visible event, never a
+     silent no-op — the reason text is autoescaped like everything else. -->
+{% if outcome %}
+<div class="divergence"><strong>Outcome:</strong> {{ outcome }}</div>
+{% endif %}
+{% if refused %}
+<div class="divergence"><strong>Decision refused:</strong> {{ refused }}</div>
+{% endif %}
+
+<!-- A target that has already moved on (double-submitted form, or decided
+     elsewhere): show its state and suppress the decision form — deciding
+     it again is refused server-side, and the page must say why. -->
+{% if review.target.state != "awaiting_review" %}
+<p class="divergence">This target is in state <code>{{ review.target.state }}</code> — it has already been decided. Decisions can only be recorded for targets in <code>awaiting_review</code>.</p>
+{% endif %}
+
+<!-- Section: company — the research summary and ICP verdict the reviewer
+     decides on. -->
+<h2>Company</h2>
+{% if review.company %}
+<table>
+  <tr><th>Company</th><td>{{ review.company.company_name }}</td></tr>
+  <tr><th>Domain</th><td>{{ review.company.domain }}</td></tr>
+  <tr><th>Industry</th><td>{{ review.company.industry if review.company.industry is not none else "—" }}</td></tr>
+  <tr><th>Estimated size</th><td>{{ review.company.estimated_size if review.company.estimated_size is not none else "—" }}</td></tr>
+  <tr><th>Geo</th><td>{{ review.company.geo if review.company.geo is not none else "—" }}</td></tr>
+  <tr><th>ICP fit (deterministic)</th><td>{{ review.company.icp_fit_label if review.company.icp_fit_label is not none else "—" }} ({{ review.company.icp_fit_score if review.company.icp_fit_score is not none else "—" }})</td></tr>
+  <tr><th>Judge fit (final)</th><td>{{ review.company.judge_fit_label if review.company.judge_fit_label is not none else "—" }}</td></tr>
+</table>
+<h3>Research summary</h3>
+<p>{{ review.company.company_summary if review.company.company_summary is not none else "—" }}</p>
+<!-- ICP fit reasons: the deterministic scorer's own stated reasons for the
+     label above — the reviewer sees WHY the formula called it a fit, not
+     just the bare verdict.  LLM-derived field: autoescape ON, no |safe,
+     same as every other value in this file. -->
+<h3>ICP fit reasons</h3>
+<pre>{{ review.company.icp_fit_reasons if review.company.icp_fit_reasons is not none else "—" }}</pre>
+<!-- ICP non-fit reasons: the other side of the deterministic verdict — what
+     argued against this being a fit.  Shown unconditionally so an empty
+     list reads as "nothing argued against it", never as a missing block. -->
+<h3>ICP non-fit reasons</h3>
+<pre>{{ review.company.icp_non_fit_reasons if review.company.icp_non_fit_reasons is not none else "—" }}</pre>
+<!-- Judge rationale: the LLM judge's written reasoning behind its final
+     label, rendered only when one exists (a judge verdict without a
+     rationale is legal).  LLM output: autoescape ON, no |safe. -->
+{% if review.company.judge_rationale is not none %}
+<h3>Judge rationale</h3>
+<p>{{ review.company.judge_rationale }}</p>
+{% endif %}
+<!-- The divergence block: rendered ONLY when the judge overrode the
+     deterministic label.  This is the review moment the operator needs at a
+     glance — both labels and the judge's mandatory justification for
+     diverging from the formula, all autoescaped (no |safe anywhere). -->
+{% if review.company.judge_fit_label is not none and review.company.judge_fit_label != review.company.icp_fit_label %}
+<div class="divergence">
+  <h3>Judge diverged from the deterministic score</h3>
+  <table>
+    <tr><th>Deterministic label</th><td>{{ review.company.icp_fit_label }}</td></tr>
+    <tr><th>Judge label</th><td>{{ review.company.judge_fit_label }}</td></tr>
+    <tr><th>Divergence justification</th><td><pre>{{ review.company.judge_divergence_justification if review.company.judge_divergence_justification is not none else "—" }}</pre></td></tr>
+  </table>
+</div>
+{% endif %}
+{% else %}
+<p class="empty">No company data for this target.</p>
+{% endif %}
+
+<!-- Section: contact + suppression status (human-review.md §2's
+     "suppression status" — already-suppressed targets must be visible
+     before the operator approves anything). -->
+<h2>Contact</h2>
+{% if review.contact %}
+<table>
+  <tr><th>Name</th><td>{{ review.contact.full_name if review.contact.full_name is not none else "—" }}</td></tr>
+  <tr><th>Title</th><td>{{ review.contact.title if review.contact.title is not none else "—" }}</td></tr>
+  <tr><th>Email</th><td>{{ review.contact.email if review.contact.email is not none else "—" }}</td></tr>
+  <tr><th>Suppressed</th><td>{{ "yes — no outbound mail to this address" if review.suppressed else "no" }}</td></tr>
+</table>
+{% else %}
+<p class="empty">No contact data for this target. reject_and_suppress is unavailable without a contact email — use reject.</p>
+{% endif %}
+
+<!-- Section: risk flags — built deterministically in the payload loader
+     (a non-allow policy decision, a missing contact email). -->
+<h2>Risk flags</h2>
+{% if review.risk_flags %}
+<ul>
+  {% for flag in review.risk_flags %}
+  <li>{{ flag }}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">None.</p>
+{% endif %}
+
+<!-- Section: latest policy decision — the risk picture the pipeline
+     recorded before drafting. -->
+<h2>Policy decision (latest)</h2>
+{% if review.policy_decision %}
+<table>
+  <tr><th>Action</th><td>{{ review.policy_decision.action }}</td></tr>
+  <tr><th>Decision</th><td>{{ review.policy_decision.decision }}</td></tr>
+  <tr><th>Risk level</th><td>{{ review.policy_decision.risk_level }}</td></tr>
+  <tr><th>Matched rules</th><td>{{ review.policy_decision.matched_rules_json }}</td></tr>
+  <tr><th>Reasons</th><td>{{ review.policy_decision.reasons_json }}</td></tr>
+</table>
+{% else %}
+<p class="empty">No policy decision recorded for this target.</p>
+{% endif %}
+
+<!-- Section: signals used — the evidence the draft was written from. -->
+<h2>Signals</h2>
+{% if review.signals %}
+<table>
+  <thead>
+    <tr><th>Type</th><th>Value</th><th>Strength</th><th>Evidence quote</th><th>Evidence tier</th><th>Verified</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+  {% for s in review.signals %}
+    <tr>
+      <td>{{ s.signal_type }}</td>
+      <td>{{ s.signal_value }}</td>
+      <td>{{ s.signal_strength }}</td>
+      <!-- evidence_quote is LLM output over scraped third-party text (P8):
+           the A5a autoescape control applies exactly as elsewhere — no
+           |safe, the raw stored text never renders as markup. -->
+      <td>{{ s.evidence_quote if s.evidence_quote is not none else "—" }}</td>
+      <td>{{ s.evidence_tier if s.evidence_tier is not none else "—" }}</td>
+      <!-- Verified: whether our deterministic code found this exact quote in
+           text we ourselves fetched (1=yes, 0=no, NULL=unknown) — the
+           reviewer sees the groundedness, never a raw integer. -->
+      <td>{{ "yes" if s.evidence_verified == 1 else ("no" if s.evidence_verified == 0 else "unknown") }}</td>
+      <!-- Source: the third-party URL the claim came from, clickable only
+           when present.  href is autoescaped by Jinja by default (no |safe);
+           opens in the same tab — deliberately no target="_blank", so no
+           window.opener exposure. -->
+      <td>{% if s.source_url %}<a href="{{ s.source_url }}">{{ s.source_url }}</a>{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No signals recorded.</p>
+{% endif %}
+
+<!-- Section: the draft diff — EVERY revision in order, each with the
+     critique that produced it.  This is the page's centrepiece: the
+     operator watches the writer⇄critic loop improve its own work, then
+     decides.  subject/body/critique text are LLM output — autoescape ON,
+     no |safe, for any reason. -->
+<h2>Draft — all revisions</h2>
+{% if review.draft_versions %}
+{% for dv in review.draft_versions %}
+<div class="draft-revision">
+  <h3>Revision {{ dv.revision_number }}{% if dv.edited_by == "operator" %} (operator edit){% endif %}</h3>
+  <table>
+    <tr><th>Subject</th><td>{{ dv.subject }}</td></tr>
+    <tr><th>Authored by</th><td>{{ dv.edited_by }}</td></tr>
+    <tr><th>Policy check</th><td>{{ "passed" if dv.policy_check_passed == 1 else ("failed" if dv.policy_check_passed == 0 else "pending (runs at send time)") }}</td></tr>
+    <tr><th>Injection scan</th><td>{{ "passed" if dv.injection_scan_passed == 1 else ("failed" if dv.injection_scan_passed == 0 else "pending (runs at send time)") }}</td></tr>
+    <tr><th>Send gate</th><td>{{ "passed" if dv.send_gate_passed == 1 else ("failed" if dv.send_gate_passed == 0 else "pending (runs at send time)") }}</td></tr>
+  </table>
+  <h4>Body</h4>
+  <pre>{{ dv.body }}</pre>
+  <h4>Footer (deterministic — not authored by the model)</h4>
+  <pre>{{ dv.footer }}</pre>
+  {% if dv.critique %}
+  <h4>Critique that produced the next revision</h4>
+  <p>Passed: {{ "yes" if dv.critique_passed else "no" }} · Severity: {{ dv.critique.severity }}</p>
+  {% if dv.critique.issues %}
+  <ul>
+    {% for issue in dv.critique.issues %}
+    <li>{{ issue }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if dv.critique.required_changes %}
+  <p><strong>Required changes:</strong> {{ dv.critique.required_changes }}</p>
+  {% endif %}
+  {% elif dv.critique_passed is not none %}
+  <p class="muted">Critique stored in a form this page cannot parse — see the target's trace page for the raw row.</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p class="empty">No draft revisions recorded.</p>
+{% endif %}
+
+<!-- Section: the five decisions — the human becomes part of the machine
+     (CLAUDE.md §9: all outbound emails require human approval before
+     send).  The form posts to the review gate; the gate refuses (with a
+     logged reason) anything a double-submit or an engaged kill switch
+     forbids.  approve_with_edits writes a NEW revision — the originals
+     above are never overwritten (docs/human-review.md §5). -->
+{% if review.target.state == "awaiting_review" %}
+<h2>Decision</h2>
+<form method="post" action="/review/{{ review.target.target_id }}/decision">
+  <!-- The run id travels as a hidden field (from the payload loader) so
+       the decision row is grouped into the run that produced the draft. -->
+  <input type="hidden" name="run_id" value="{{ review.run_id }}">
+  <p>
+    <label>Decision
+      <select name="decision">
+        {% for d in valid_decisions %}
+        <option value="{{ d }}">{{ d }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </p>
+  <p><label>Reason / note<br><textarea name="reason" rows="3" cols="80"></textarea></label></p>
+  <p><label>Research note (for escalate — what the follow-up research should look into)<br><textarea name="research_note" rows="3" cols="80"></textarea></label></p>
+  <p><label>Edited subject (for approve_with_edits)<br><input type="text" name="edited_subject" size="80"></label></p>
+  <p><label>Edited body (for approve_with_edits)<br><textarea name="edited_body" rows="8" cols="80"></textarea></label></p>
+  <p><button type="submit">Record decision</button></p>
+</form>
+<p class="muted">The decision is recorded through the review gate: it writes a <code>review_decisions</code> row, executes the state transition, and logs every step — a refusal is always visible, never silent.</p>
+{% endif %}
+{% endblock %}

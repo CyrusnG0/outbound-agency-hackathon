@@ -1,0 +1,49 @@
+[project]
+name = "outbound-agency"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3",
+    # google-adk is pinned to EXACTLY 2.7.1 (task A4a), not a range: the Phase 1
+    # pipeline uses SequentialAgent, which is deprecated in 2.7.1 in favor of
+    # Workflow, but Workflow is a BaseNode and cannot be used as an
+    # LlmAgent sub_agent (pydantic ValidationError) — Milestone C4's LlmAgent
+    # root needs these as sub-agents.  The pin prevents an upgrade from
+    # removing SequentialAgent mid-hackathon.
+    "google-adk==2.7.1",
+    "requests>=2.31,<3",
+    "beautifulsoup4>=4.12,<5",
+    "playwright>=1.45,<2",
+    "pyyaml>=6.0,<7",
+    "python-dotenv>=1.0,<2",
+    "anthropic>=0.34,<1",
+    "google-genai>=2.18,<3",
+    # Direct import in app/llm.py: google-genai lets raw httpx transport errors
+    # escape generate_content (unlike the anthropic SDK, which wraps them), so
+    # _call_gemini must catch httpx.RequestError by name.  Transitive via both
+    # SDKs today, declared explicitly because we import it ourselves.
+    "httpx>=0.27,<1",
+    "tavily-python>=0.4,<1",
+    # Cloud SQL (Postgres) support — the deployed hackathon database. The
+    # connector authenticates via ADC locally and via the Cloud Run service
+    # account in production (no IP allowlisting, no password in the
+    # container); pg8000 is its pure-Python Postgres driver.
+    "cloud-sql-python-connector[pg8000]>=1.14,<2",
+    "pg8000>=1.30,<2",
+    # Direct imports in app/console/app.py (ticket A5a): previously only transitive via google-adk's bundled FastAPI server — declared directly so an ADK version bump cannot remove them.
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "jinja2>=3.1,<4",
+    # python-multipart (ticket H10): a FastAPI RUNTIME extra, not a direct
+    # console import — the console's review-decision and kill-switch routes
+    # POST HTML forms, and fastapi's ensure_multipart_is_installed raises at
+    # ROUTE-BUILD time if this is absent, so the container cannot boot.
+    "python-multipart>=0.0.20,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,38 @@
+# Real production offer — mental health practice intake automation.
+# Same pitch as tests/fixtures/offers/therapy-app.yaml (the checkpoint test's
+# copy, which must stay test-only per docs/superpowers/plans — this file is
+# the real one config/offers/*.yaml sync reads for actual runs).
+#
+# from_address is a placeholder — Phase 1 (research/score) never reads it,
+# so it's inert for this run, but it MUST be a real sending domain before
+# Phase 1b (drafting/sending) is built.
+#
+# icp (plan task B2c): the offer's Ideal Customer Profile definition — the
+# ICP judge compares each researched company against this block (plus the
+# pitch) when issuing its final fit_label.  OPTIONAL: offers without an icp
+# block load fine and the judge still runs, with only the pitch to go on.
+# disqualifiers are hard rules for the judge: a company matching one must
+# not be labelled strong_fit/good_fit regardless of the numeric score.
+pitch: "We help mental health practices cut intake admin time in half."
+persona_hint: "Operations or clinical lead at a mid-size practice."
+template: "default_outreach_v1"
+from_address: "outreach@REPLACE-ME-BEFORE-SENDING.test"
+# scheduling_enabled (demo, 2026-08-30 — replaces the earlier booking_url
+# static link): when true and a positive reply has queued a follow-up
+# draft, the follow-up's footer includes a REAL reserved calendar slot
+# instead of a link — app/tools/schedule_meeting.py picks and books it
+# against an actual computed calendar. Threaded through
+# _load_offer_draft_config into _compose_footer in app/agents/draft.py,
+# the SAME deterministic, code-only path the unsubscribe link uses
+# (B3-Z1) — the writer never sees or authors the reservation. Optional:
+# an offer without this key (or set to false) still gets a complete
+# footer (the unsubscribe token alone is compliance-critical; this is
+# additive and only ever fires on the follow-up path).
+scheduling_enabled: true
+icp:
+  geography: "Hong Kong"
+  company_size: "mid-size practice (roughly 3-20 clinicians)"
+  industry: "mental health / therapy / counselling clinic"
+  disqualifiers:
+    - "located outside Hong Kong"
+    - "not a clinical practice (no licensed clinicians)"

@@ -1,0 +1,32 @@
+# Console-only runtime dependency closure (ticket A5b).
+#
+# This file deliberately contains ONLY the read-only operator console's
+# runtime closure: fastapi + jinja2 (via fastapi.templating) + pydantic,
+# python-multipart (FastAPI's Form support — a runtime extra, not a console
+# import), plus app.db's postgres stack — pg8000 (imported at module level
+# by app/db.py) and the Cloud SQL Python Connector (imported lazily by
+# app/db.py, but the package must be present because OUTBOUND_DB_TARGET is a
+# cloudsql:// URL in deployment).
+#
+# Deliberately EXCLUDED, on purpose, not forgotten: playwright,
+# beautifulsoup4, requests, tavily-python, anthropic, google-genai and
+# google-adk. The console is read-only and imports none of them, and
+# playwright alone would add hundreds of MB of browser binaries to a
+# container that never renders a page. Revisit this file when the deployed
+# service grows beyond the read-only console (milestone B).
+#
+# Version ranges are copied from pyproject.toml — the single source of
+# truth for dependency bounds. Do not widen or invent new ranges here.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+jinja2>=3.1,<4
+# python-multipart (ticket H10): FastAPI's Form(...) support — the console's
+# review-decision and kill-switch routes POST HTML forms, and FastAPI raises
+# "Form data requires python-multipart to be installed" at ROUTE-BUILD time
+# (not runtime) if this is absent, so the container cannot boot. Not imported
+# directly by the console — it is a FastAPI runtime extra, which is why it
+# looks unused; do not remove it.
+python-multipart>=0.0.20,<1
+pydantic>=2.7,<3
+pg8000>=1.30,<2
+cloud-sql-python-connector[pg8000]>=1.14,<2

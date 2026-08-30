@@ -1,0 +1,32 @@
+# Secrets — never commit. python-dotenv reads this for local env vars
+# (DEEPSEEK_API_KEY, model pins, etc.) per app/llm.py.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data (SQLite DBs are runtime state, not source)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# DRY_RUN outbox (ticket B5) — the .eml artifacts are runtime output of the
+# simulated send, never source; nothing in them was ever transmitted.
+data/outbox/
+
+# The replay kill-switch scratch copy (ticket D1) — scripts/demo_replay.sh
+# copies config/kill_switch.json here so the console's toggle writes a
+# disposable file, never the real tracked switch. Runtime copy, never source.
+data/replay_kill_switch.json
+
+# app/conversation_sim.py's scripted-reply .eml output (ticket D2 follow-up)
+# — runtime output of a `demo_live.sh finish` / `converse` run, written with
+# the "convo_" prefix (CONVO_FILE_PREFIX) so it never collides with the
+# checked-in inbox fixtures (data/inbox/01_interested_reply.eml etc., and
+# demo_reply_*.eml — both real source, still tracked below this line).
+data/inbox/convo_*.eml

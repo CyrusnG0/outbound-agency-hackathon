@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+<!-- target_detail.html — one target's full audit trail (ticket A5a sections
+     1-7): the governance trail the whole project exists to produce. -->
+{% block title %}Target {{ target.target_id }} — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Target <code>{{ target.target_id }}</code></h1>
+
+<!-- Section 1: Target — the pipeline's current verdict on this target. -->
+<h2>Target</h2>
+<table>
+  <tr><th>State</th><td>{{ target.state }}</td></tr>
+  <tr><th>Score</th><td>{{ target.score if target.score is not none else "—" }}</td></tr>
+  <tr><th>Final recommendation</th><td>{{ target.final_recommendation if target.final_recommendation is not none else "—" }}</td></tr>
+  <tr><th>Offer</th><td>{{ target.offer_slug }}</td></tr>
+  <tr><th>Source</th><td>{{ target.source }}</td></tr>
+  <tr><th>Created</th><td class="muted">{{ target.created_at }}</td></tr>
+  <tr><th>Updated</th><td class="muted">{{ target.updated_at }}</td></tr>
+  <tr><th>Last signal refresh</th><td class="muted">{{ target.last_signal_refresh_at if target.last_signal_refresh_at is not none else "—" }}</td></tr>
+</table>
+
+<!-- Section 2: Company — research summary and the ICP (ideal customer
+     profile) verdict. company_summary is LLM output derived from scraped
+     pages; like every other value it is autoescaped, never rendered raw.
+     B2c: the deterministic verdict (icp_fit_label/score — the EVIDENCE)
+     and the ICP judge's verdict (judge_fit_label/rationale — the final
+     label) are shown side by side; a divergence between them is the most
+     interesting thing on this page and gets its own block.  judge_rationale
+     and judge_divergence_justification are LLM output: autoescape stays ON
+     (the A5a stored-XSS control, reaffirmed in B2b) — no |safe anywhere
+     near them. -->
+<h2>Company</h2>
+{% if company %}
+<table>
+  <tr><th>Company name</th><td>{{ company.company_name }}</td></tr>
+  <tr><th>Normalized domain</th><td>{{ company.normalized_domain }}</td></tr>
+  <tr><th>Industry</th><td>{{ company.industry if company.industry is not none else "—" }}</td></tr>
+  <tr><th>Estimated size</th><td>{{ company.estimated_size if company.estimated_size is not none else "—" }}</td></tr>
+  <tr><th>Geo</th><td>{{ company.geo if company.geo is not none else "—" }}</td></tr>
+  <tr><th>ICP fit label (deterministic)</th><td>{{ company.icp_fit_label if company.icp_fit_label is not none else "—" }}</td></tr>
+  <tr><th>ICP fit score (policy P4 reads this)</th><td>{{ company.icp_fit_score if company.icp_fit_score is not none else "—" }}</td></tr>
+  <tr><th>Judge fit label (final)</th><td>{{ company.judge_fit_label if company.judge_fit_label is not none else "—" }}</td></tr>
+</table>
+<h3>Company summary</h3>
+<p>{{ company.company_summary if company.company_summary is not none else "—" }}</p>
+<h3>ICP fit reasons</h3>
+<pre>{{ company.icp_fit_reasons if company.icp_fit_reasons is not none else "—" }}</pre>
+<h3>ICP non-fit reasons</h3>
+<pre>{{ company.icp_non_fit_reasons if company.icp_non_fit_reasons is not none else "—" }}</pre>
+{% if company.judge_rationale is not none %}
+<h3>Judge rationale</h3>
+<p>{{ company.judge_rationale }}</p>
+{% endif %}
+<!-- The divergence block: rendered ONLY when the judge overrode the
+     deterministic label.  This is the audit-trail moment the operator
+     needs to see at a glance — both labels and the judge's justification
+     for overriding the number, all autoescaped. -->
+{% if company.judge_fit_label is not none and company.judge_fit_label != company.icp_fit_label %}
+<div class="divergence">
+  <h3>Judge diverged from the deterministic score</h3>
+  <table>
+    <tr><th>Deterministic label</th><td>{{ company.icp_fit_label }}</td></tr>
+    <tr><th>Judge label</th><td>{{ company.judge_fit_label }}</td></tr>
+    <tr><th>Divergence justification</th><td><pre>{{ company.judge_divergence_justification if company.judge_divergence_justification is not none else "—" }}</pre></td></tr>
+  </table>
+</div>
+{% endif %}
+{% else %}
+<p class="empty">No company data.</p>
+{% endif %}
+
+<!-- Section 3: Contact — may be absent: targets.contact_id is nullable by
+     design (company-only CSV leads are allowed). Render the absence, never
+     a crash. -->
+<h2>Contact</h2>
+{% if contact %}
+<table>
+  <tr><th>Full name</th><td>{{ contact.full_name if contact.full_name is not none else "—" }}</td></tr>
+  <tr><th>Title</th><td>{{ contact.title if contact.title is not none else "—" }}</td></tr>
+  <tr><th>Seniority</th><td>{{ contact.seniority if contact.seniority is not none else "—" }}</td></tr>
+  <tr><th>Email</th><td>{{ contact.email if contact.email is not none else "—" }}</td></tr>
+  <tr><th>Email verified</th><td>{{ "yes" if contact.email_verified else "no" }}</td></tr>
+</table>
+{% else %}
+<!-- contact_id is NULL on this target: a documented, legitimate state. -->
+<p class="empty">No contact data for this target.</p>
+{% endif %}
+
+<!-- Section 4: Signals — enrichment data points found for this target,
+     oldest first. signal_value AND evidence_quote can be scraped
+     third-party text and LLM output — both stay autoescaped (the A5a
+     stored-XSS control); no |safe anywhere near this data. B2b: the
+     evidence columns make each signal's backing quote and its three-way
+     verdict (source/findings/unverified) visible — an unverified signal is
+     still shown, marked, never hidden (mark-don't-drop). -->
+<h2>Signals</h2>
+{% if signals %}
+<table>
+  <thead>
+    <tr><th>Type</th><th>Value</th><th>Strength</th><th>Evidence quote</th><th>Tier</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+  {% for s in signals %}
+    <tr>
+      <td>{{ s.signal_type }}</td>
+      <td>{{ s.signal_value }}</td>
+      <td>{{ s.signal_strength }}</td>
+      <td>{{ s.evidence_quote if s.evidence_quote is not none else "—" }}</td>
+      <td>{{ s.evidence_tier if s.evidence_tier is not none else "—" }}</td>
+      <td>{% if s.source_url %}<a href="{{ s.source_url }}">{{ s.source_url }}</a>{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No signals recorded.</p>
+{% endif %}
+
+<!-- Section 5: Policy decisions — every policy check recorded against this
+     target, oldest first, with the rule/reason JSON shown verbatim. -->
+<h2>Policy decisions</h2>
+{% if policy_decisions %}
+{% for p in policy_decisions %}
+<table>
+  <tr><th>Action</th><td>{{ p.action }}</td></tr>
+  <tr><th>Decision</th><td>{{ p.decision }}</td></tr>
+  <tr><th>Risk level</th><td>{{ p.risk_level }}</td></tr>
+  <tr><th>Created</th><td class="muted">{{ p.created_at }}</td></tr>
+  <tr><th>Reasons</th><td><pre>{{ p.reasons_json }}</pre></td></tr>
+  <tr><th>Matched rules</th><td><pre>{{ p.matched_rules_json }}</pre></td></tr>
+  <tr><th>Missing fields</th><td><pre>{{ p.missing_fields_json }}</pre></td></tr>
+</table>
+{% endfor %}
+{% else %}
+<p class="empty">No policy decisions recorded.</p>
+{% endif %}
+
+<!-- Section 6: State transitions — the state machine's audit log for this
+     target, chronological: answers "how did this target get here?". -->
+<h2>State transitions</h2>
+{% if state_transitions %}
+<table>
+  <thead>
+    <tr><th>From</th><th>To</th><th>Reason</th><th>Actor</th><th>Created</th></tr>
+  </thead>
+  <tbody>
+  {% for tr in state_transitions %}
+    <tr>
+      <td>{{ tr.previous_state }}</td>
+      <td>{{ tr.new_state }}</td>
+      <td>{{ tr.reason }}</td>
+      <td>{{ tr.actor }}</td>
+      <td class="muted">{{ tr.created_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No state transitions recorded.</p>
+{% endif %}
+
+<!-- Section 7: Trace log — every pipeline step for this target, oldest
+     first. input/output JSON is pretty-printed server-side in
+     app/console/app.py and autoescaped here like everything else.
+     U2: the trace-log section is the natural entry point to the live run
+     view — each step already carries its run_id, so one "watch this run live"
+     link is rendered per DISTINCT run_id shown on this page (a target's steps
+     can span several stage runs: a phase1 run, then a draft run, ...).
+     D2 follow-up: run_id="" is a legal value (app/console/app.py:531 — the
+     review_decision step is grouped under "" when the queue payload carried
+     no run_id), so it survives `unique` as its own falsy entry and rendered
+     a dead `/run/` link with no id. `select` drops every falsy run_id
+     (None and "") before the list is built, so only real, followable run
+     ids ever produce a link. -->
+<h2>Trace log</h2>
+{% set run_ids = steps | map(attribute='run_id') | select | unique | list %}
+{% if run_ids %}
+<!-- U2 entry point: one link per distinct run_id on this page, pointing at
+     the live run view for that run. -->
+<p class="muted">{% for rid in run_ids %}<a href="/run/{{ rid }}">Watch this run live</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+{% endif %}
+{% if steps %}
+{% for step in steps %}
+<h3><code>{{ step.step_id }}</code> — {{ step.tool_name }}</h3>
+<table>
+  <tr><th>Status</th><td>{{ step.status }}</td></tr>
+  <tr><th>Agent</th><td>{{ step.agent_id if step.agent_id is not none else "—" }}</td></tr>
+  <tr><th>Model call hash</th><td class="muted">{{ step.model_call_hash if step.model_call_hash is not none else "—" }}</td></tr>
+  <tr><th>Created</th><td class="muted">{{ step.created_at }}</td></tr>
+</table>
+<h4>Input</h4>
+<pre>{{ step.input_json }}</pre>
+<h4>Output</h4>
+<pre>{{ step.output_json }}</pre>
+{% endfor %}
+{% else %}
+<p class="empty">No trace steps recorded.</p>
+{% endif %}
+{% endblock %}

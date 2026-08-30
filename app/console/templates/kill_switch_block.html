@@ -1,0 +1,31 @@
+<!-- kill_switch_block.html — the always-visible kill-switch indicator and
+     toggle, included by the review pages (ticket B4b).  The state is read
+     UNCACHED on every request in app/console/app.py, so what is rendered
+     here is the switch's current state, never a stale one.
+     Autoescape applies to every rendered value, including the switch's
+     reason string (operator- or fault-authored text) — no |safe anywhere. -->
+<div class="killswitch {{ 'engaged' if kill_switch.engaged else 'disengaged' }}">
+  <h2>Kill switch</h2>
+  {% if kill_switch.engaged %}
+  <p><strong>ENGAGED</strong> — all outbound actions are halted.</p>
+  {% else %}
+  <p>Disengaged — outbound actions are permitted (subject to every other gate).</p>
+  {% endif %}
+  <p class="muted">Reason: {{ kill_switch.reason if kill_switch.reason else "—" }}</p>
+  <p class="muted">Last set by: {{ kill_switch.updated_by if kill_switch.updated_by else "—" }} at {{ kill_switch.updated_at if kill_switch.updated_at else "—" }}</p>
+  <!-- The toggle: rewrites config/kill_switch.json (the single source of
+       truth — runbook.md §1).  Two radios, exactly one value each; the
+       route refuses anything else with a 422, never a guessed state. -->
+  <form method="post" action="/kill-switch">
+    <label><input type="radio" name="engaged" value="true"> Engage (halt everything)</label>
+    <label><input type="radio" name="engaged" value="false"> Disengage</label>
+    <button type="submit">Set switch</button>
+  </form>
+</div>
+<style>
+  /* The switch state is colour-coded so an ENGAGED switch is unmissable on
+     the demo recording — this is the emergency control, not a setting. */
+  .killswitch { border: 2px solid #e3e6ea; background: #ffffff; padding: .5rem .75rem; margin: 1rem 0; }
+  .killswitch.engaged { border-color: #b3261e; background: #fdecea; }
+  .killswitch h2 { margin: .25rem 0; border: none; }
+</style>

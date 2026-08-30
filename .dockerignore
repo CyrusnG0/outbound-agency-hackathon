@@ -1,0 +1,31 @@
+# ── SECURITY CONTROL, not build hygiene ─────────────────────────────────────
+# The repo root contains .env with REAL API keys (GOOGLE_API_KEY,
+# DEEPSEEK_API_KEY). Without this line, a `COPY . .` would bake those keys
+# into an image layer; anyone who can pull the image can extract that layer
+# and read the keys. .env must never exist in any image, ever.
+.env
+# Any .env variant (.env.local, .env.production, ...) gets the same
+# treatment — assume any of them may hold secrets.
+.env.*
+# ...with ONE deliberate exception: .env.example is committed and contains
+# documented placeholder NAMES only, no real values. Excluding it would
+# falsely signal to a reader that it holds secrets.
+!.env.example
+# .git would double the build context and leak the repo's full history into
+# an image layer.
+.git
+# data/ holds the live local SQLite database — a database must never ship
+# inside an image (it would be stale by definition, and in deployment the
+# database is Cloud SQL, not a file).
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Tests and docs are dev-time artifacts; the console image runs none of
+# them, so they would only bloat the context and the image.
+tests/
+docs/
+*.db
+# Local virtualenvs would shadow the image's own site-packages if copied.
+.venv/
+venv/

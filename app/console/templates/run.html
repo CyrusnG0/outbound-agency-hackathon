@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+<!-- run.html — the live run view (ticket U2): the judge watches the pipeline
+     move in real time.  A server-rendered shell whose inline <script> polls
+     GET /api/run/{run_id}/steps on an interval and renders each step as it
+     lands.  This is the FIRST client-side JavaScript this codebase has ever
+     shipped, and the threat model changes because of it:
+
+     - Jinja autoescape protects everything the SERVER renders.  Client-side
+       JS has NO such automatic protection — assigning a string to the
+       inner-HTML DOM property (or the adjacent-insertion API) would be a
+       SECOND, separate stored-XSS vector that autoescape does nothing about.
+     - The live view therefore renders ONLY tool_name / status / created_at
+       (DB-CHECK-constrained status, code-controlled tool_name strings, and a
+       timestamp) — NOT input_json/output_json, which can hold LLM output
+       derived from scraped third-party pages (the exact content class
+       review_target.html / target_detail.html are careful about).  Full step
+       detail stays on the existing, already-safe target-detail trace-log
+       page; every rendered row here LINKS there (see the U2 scope decision).
+     - Every value from the API is inserted with textContent ONLY — never a
+       string-assignment DOM setter.  This is the JS-world equivalent of
+       Jinja's autoescape and is enforced as strictly.
+     - No |safe anywhere: run_id / target_id / tool_name / status / created_at
+       all pass through Jinja autoescape like every other value in this
+       console. -->
+{% block title %}Run {{ run_id }} — Outbound Agency Console{% endblock %}
+{% block content %}
+<h1>Run <code>{{ run_id }}</code></h1>
+
+<!-- The server-rendered run id, read by the script below through its data
+     attribute (autoescaped by Jinja like every other value).  It MUST precede
+     the <script> block: the inline script runs synchronously while the HTML
+     is still being parsed, so it can only read elements that already exist. -->
+<span id="run-data" data-run-id="{{ run_id }}" hidden></span>
+
+<!-- The live run's own styles live here (in the content block, not a new
+     base.html block) so this page's additions stay self-contained and the
+     shared shell is untouched.  The palette follows base.html's existing
+     minimal, semantic CSS — nothing new is pulled in. -->
+<style>
+  #run-status { padding: .5rem .75rem; border: 1px solid #e3e6ea; background: #ffffff; margin-bottom: 1rem; font-weight: 600; }
+  /* The three visibly distinct states: live (green — still polling),
+     complete/awaiting (amber — the human gate, THE demo beat), stopped
+     (muted — the safety valve fired; NOT live).  A stalled poll must never be
+     mistaken for a live one. */
+  #run-status.live { background: #e8f5e9; border-color: #2f6f4f; color: #1d4a33; }
+  #run-status.complete { background: #fff7ef; border-color: #c0682a; color: #8a4a1c; }
+  #run-status.stopped { background: #eef1f4; border-color: #5b6470; color: #5b6470; }
+  #step-list { list-style: none; padding: 0; }
+  #step-list .step { display: flex; gap: .75rem; align-items: baseline; padding: .4rem .75rem; border-bottom: 1px solid #e3e6ea; background: #ffffff; }
+  #step-list .step-failed { background: #fdf0f0; }
+  #step-list .step-retried { background: #fff9e8; }
+  #step-list .tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
+  #step-list .status-badge { font-size: .75rem; padding: .1rem .45rem; border-radius: 3px; background: #eef1f4; }
+  #step-list .step-success .status-badge { background: #e8f5e9; color: #1d4a33; }
+  #step-list .step-failed .status-badge { background: #fde3e3; color: #8a1c1c; }
+  #step-list .step-retried .status-badge { background: #fff3cd; color: #6b5200; }
+  #step-list .time { margin-left: auto; }
+  #target-states { list-style: none; padding: 0; }
+  #target-states .state-badge { font-size: .75rem; padding: .1rem .45rem; border-radius: 3px; background: #eef1f4; margin-left: .5rem; }
+  /* awaiting_review gets the distinct highlight — "a decision is waiting" is
+     the single most important demo beat, so it must never look like any
+     other state. */
+  #target-states .state-awaiting_review { background: #fde3c8; color: #8a4a1c; font-weight: 700; }
+</style>
+
+<p class="muted">Live view — polls the steps trace for this run and renders
+each node as it lands. Full input/output JSON for any step is on the linked
+target's trace-log page.</p>
+
+<div id="run-status" class="live">Watching run {{ run_id }} — waiting for the run to start…</div>
+
+<h2>Steps</h2>
+<ol id="step-list"><li class="empty">No steps yet — the run has not logged anything.</li></ol>
+
+<h2>Target states</h2>
+<ul id="target-states"></ul>
+
+<script>
+  (function () {
+    "use strict";
+    // ── Why every value below goes through textContent and nothing else ──
+    // This is the first client-side JS this codebase ships.  Jinja autoescape
+    // protects server-rendered values, but NOTHING protects values a client
+    // script inserts into the DOM: assigning a string to the inner-HTML DOM
+    // property (or the adjacent-insertion API) would parse it as HTML and
+    // reopen the stored-XSS class this codebase has spent real effort closing
+    // elsewhere (docs/threat-model.md, policy rule P8).  So the rule is
+    // non-negotiable: build the DOM nodes with createElement, THEN set their
+    // text with textContent.  A future editor must not "simplify" this into a
+    // string assignment — it would silently undo the entire autoescape control.
+
+    // ── Named constants, not magic numbers (U2 ticket) ──
+    var POLL_INTERVAL_MS = 2000;  // ~2s: fast enough to watch a live run move, cheap enough for a SELECT-only poll
+    var MAX_POLLS = 60;           // 60 × 2s = 120s safety valve: a run that never resolves must not poll forever
+
+    // Read the run id from a server-rendered, Jinja-autoescaped data
+    // attribute rather than the URL bar — the server-rendered value stays
+    // authoritative, and autoescape has already neutralized anything hostile.
+    var RUN_ID = document.getElementById("run-data").dataset.runId;
+    // encodeURIComponent keeps the id safe in the URL even if a future id
+    // format ever contains characters that are not path-safe.
+    var API_URL = "/api/run/" + encodeURIComponent(RUN_ID) + "/steps";
+
+    var listEl = document.getElementById("step-list");
+    var statusEl = document.getElementById("run-status");
+    var targetEl = document.getElementById("target-states");
+
+    var seen = {};      // step_id -> true: re-polls return the FULL list; render each step exactly once
+    var pollCount = 0;  // how many polls (and fetch failures) have fired, for the max-poll safety valve
+    var stopped = false;  // module-level: set authoritatively by stopPolling, checked by poll() (U2-fix Finding 5)
+
+    function renderStep(step) {
+      // Idempotent: the API returns the whole list every poll, so a step must
+      // be appended only the first time it is seen.
+      if (seen[step.step_id]) return;
+      seen[step.step_id] = true;
+
+      var li = document.createElement("li");
+      // status is DB-CHECK-constrained to success/failed/retried (db-schema.md
+      // §1a), so it is safe to use as a class name; the CSS above colors each.
+      li.className = "step step-" + step.status;
+
+      var tool = document.createElement("span");
+      tool.className = "tool";
+      tool.textContent = step.tool_name;  // textContent ONLY — see the top comment
+      li.appendChild(tool);
+
+      var status = document.createElement("span");
+      status.className = "status-badge";
+      status.textContent = step.status;   // textContent ONLY
+      li.appendChild(status);
+
+      var time = document.createElement("span");
+      time.className = "time muted";
+      time.textContent = step.created_at; // textContent ONLY
+      li.appendChild(time);
+
+      if (step.target_id) {
+        // Link to the existing target-detail trace-log page for the full
+        // input/output JSON this live view deliberately does not render
+        // inline (the U2 scope decision).  href is a URL we build from a
+        // code-controlled id; textContent keeps the visible label inert.
+        var link = document.createElement("a");
+        link.href = "/targets/" + encodeURIComponent(step.target_id);
+        link.textContent = step.target_id; // textContent ONLY
+        li.appendChild(link);
+      }
+
+      listEl.appendChild(li);
+    }
+
+    function renderTargetStates(states) {
+      // Each target's current state, textContent only.  The list is rebuilt
+      // on every poll — states are few and this keeps the badges current.
+      // Clearing via textContent is safe (it never parses HTML).
+      targetEl.textContent = "";
+      var ids = Object.keys(states).sort();
+      if (ids.length === 0) {
+        var none = document.createElement("li");
+        none.className = "empty";
+        none.textContent = "No targets associated with this run yet.";
+        targetEl.appendChild(none);
+        return;
+      }
+      ids.forEach(function (targetId) {
+        var state = states[targetId];
+        var li = document.createElement("li");
+        var link = document.createElement("a");
+        link.href = "/targets/" + encodeURIComponent(targetId);
+        link.textContent = targetId;          // textContent ONLY
+        li.appendChild(link);
+        var badge = document.createElement("span");
+        // state comes from targets.state, a code-controlled state-machine
+        // vocabulary, so it is safe as a class name; awaiting_review gets the
+        // distinct highlight via CSS above.
+        badge.className = "state-badge state-" + state;
+        badge.textContent = state;            // textContent ONLY
+        li.appendChild(badge);
+        targetEl.appendChild(li);
+      });
+    }
+
+    function setStatus(message, className) {
+      statusEl.textContent = message;  // textContent ONLY
+      statusEl.className = "status " + className;
+    }
+
+    function stopPolling(message, className) {
+      // End the loop AUTHORITATIVELY (U2-fix Finding 5): set the module-level
+      // `stopped` flag so a future call site cannot accidentally keep the loop
+      // running by forgetting to return — the old body only set the status and
+      // relied on every caller returning right after, a trap for a future
+      // editor.  poll() itself now checks the flag, so once this runs no
+      // further poll is ever scheduled.  The "stopped" and "complete" styles
+      // are visibly distinct from the "live" style (CSS above) so a stalled
+      // poll is never mistaken for a live one.
+      stopped = true;
+      setStatus(message, className);
+    }
+
+    function poll() {
+      if (stopped) return;  // the authoritative gate: no poll is scheduled once stopped (U2-fix Finding 5)
+      pollCount += 1;
+      fetch(API_URL)
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          data.steps.forEach(renderStep);
+          renderTargetStates(data.target_states);
+
+          if (data.complete) {
+            // The run reached the stop condition.  awaiting_review is THE
+            // demo beat — highlight it distinctly instead of a generic
+            // "complete" line.
+            var awaiting = Object.keys(data.target_states).filter(function (t) {
+              return data.target_states[t] === "awaiting_review";
+            });
+            if (awaiting.length > 0) {
+              stopPolling("RUN COMPLETE — " + awaiting.length + " target(s) are awaiting human review. A decision is waiting.", "complete");
+            } else {
+              stopPolling("Run complete — target(s) reached a terminal or post-gate state.", "complete");
+            }
+            return;
+          }
+
+          if (pollCount >= MAX_POLLS) {
+            // Safety valve: the run never reached a stop state.  Say so in a
+            // way that cannot be mistaken for a live run.
+            stopPolling("Stopped watching after " + MAX_POLLS + " polls — this run may still be running. Reload to resume watching.", "stopped");
+            return;
+          }
+          setStatus("Watching run " + RUN_ID + "… poll " + pollCount + "/" + MAX_POLLS, "live");
+          setTimeout(poll, POLL_INTERVAL_MS);
+        })
+        .catch(function () {
+          // A transient fetch error must not kill the loop silently — but it
+          // also must not run forever: count it against the safety valve.
+          if (pollCount >= MAX_POLLS) {
+            stopPolling("Stopped watching after " + MAX_POLLS + " attempts (fetch errors). Reload to resume.", "stopped");
+            return;
+          }
+          setStatus("Watching run " + RUN_ID + "… (fetch error, retrying) poll " + pollCount + "/" + MAX_POLLS, "live");
+          setTimeout(poll, POLL_INTERVAL_MS);
+        });
+    }
+
+    // Render immediately (first paint shows any steps that already exist),
+    // then poll on the interval.
+    poll();
+  })();
+</script>
+{% endblock %}
