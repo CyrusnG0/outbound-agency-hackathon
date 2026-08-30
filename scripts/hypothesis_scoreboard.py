@@ -51,6 +51,19 @@ so on any one run most rows are 0/0/0/0 and the summary line says so
 honestly.  It is a demo artifact for a judge to read, not a statistical
 instrument — and the P4-based confidence floor above is exactly why it will
 never overclaim.
+
+REWARD/PENALTY, MADE VISIBLE ON PURPOSE — each printed row also carries a
+plain-language verdict (_verdict, below): "encouraging" for a positive
+score, "discouraging" for a negative one, "no signal yet" otherwise. This
+IS the reward/penalty judgment — a real one, computed the same way the
+score above it is. What it is NOT is an input to anything: no code
+anywhere reads this verdict, or the score it is derived from, to change
+which hypothesis gets tried next (_select_style_hypothesis in
+app/agents/draft.py is a pure function of target_id, full stop). The
+verdict column is the honest, visible boundary of that choice — proof the
+judgment exists and is real, without pretending it is wired to anything it
+is not. Closing that loop, with guardrails, is docs/feedback-loop.md's job,
+not this script's.
 """
 
 import argparse  # stdlib argument parsing — the same --db convention every other CLI in this repo uses
@@ -190,18 +203,48 @@ def compute_scoreboard(conn) -> dict[str, dict]:
     return board
 
 
+def _verdict(score: int) -> str:
+    """Render this hypothesis's score as a plain-language reward/penalty
+    judgment — the concrete answer to "does this reward good ones and
+    penalize bad ones": YES, the judgment itself is real, computed from
+    real trusted outcomes, exactly like the win/loss counts it is derived
+    from.
+
+    What this verdict is NOT: an input to anything.  Nothing in
+    _select_style_hypothesis (app/agents/draft.py) ever reads a score — the
+    selector is a pure function of target_id, unaffected by this or any
+    other outcome.  This string is the visible, honest boundary of that
+    choice: the judgment exists and is real; acting on it does not, on
+    purpose, until docs/feedback-loop.md's guardrails are actually built.
+    """
+    # A positive score means real wins outnumber real losses for this
+    # hypothesis — worth calling out as encouraging, in plain language.
+    if score >= 1:
+        return "encouraging"
+    # A negative score means real losses outnumber real wins — worth
+    # flagging, in plain language, as the opposite signal.
+    if score <= -1:
+        return "discouraging"
+    # score == 0 covers both "never tested" (0/0/0/0) and "tied" (e.g.
+    # 1 win, 1 loss) — genuinely no signal either way, and saying so
+    # honestly beats implying a verdict the data doesn't support.
+    return "no signal yet"
+
+
 def _print_scoreboard(board: dict[str, dict]) -> None:
     """Print the plain-text table, one row per hypothesis H1..H10 in order.
 
-    Each row carries the tag, the tested/win/loss/score counts, and the full
-    claim text imported from app.agents.draft — so the table is
-    self-explanatory without cross-referencing source code, and a never-tested
-    hypothesis still appears (0/0/0/0) rather than vanishing from the output.
+    Each row carries the tag, the tested/win/loss/score counts, the full
+    claim text imported from app.agents.draft, and a plain-language verdict
+    (_verdict, above) — so the table is self-explanatory without
+    cross-referencing source code, and a never-tested hypothesis still
+    appears (0/0/0/0, "no signal yet") rather than vanishing from the
+    output.
     """
     # Fixed-width numeric columns keep the counts aligned; the claim column is
     # free text.  The header names each column so the numbers are readable at
     # a glance, not just by position.
-    print(f"{'ID':<4}{'Tested':>7}{'Wins':>6}{'Losses':>7}{'Score':>7}  Claim")
+    print(f"{'ID':<4}{'Tested':>7}{'Wins':>6}{'Losses':>7}{'Score':>7}  {'Verdict':<14}Claim")
     print("-" * 100)
     for i, claim in enumerate(_STYLE_HYPOTHESES, start=1):
         # The tag is the SAME f"H{i}" derivation as compute_scoreboard's keys
@@ -209,9 +252,13 @@ def _print_scoreboard(board: dict[str, dict]) -> None:
         # never point at the wrong row of the board.
         hid = f"H{i}"
         stats = board[hid]
+        # _verdict turns the real score into a plain-language judgment —
+        # printed, never fed back into anything (see _verdict's own
+        # docstring for exactly where that boundary sits).
+        verdict = _verdict(stats["score"])
         print(
             f"{hid:<4}{stats['tested']:>7}{stats['wins']:>6}"
-            f"{stats['losses']:>7}{stats['score']:>7}  {claim}"
+            f"{stats['losses']:>7}{stats['score']:>7}  {verdict:<14}{claim}"
         )
 
 

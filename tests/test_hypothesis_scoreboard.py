@@ -230,3 +230,23 @@ def test_scoreboard_dedupes_multiple_revisions_per_target(conn):
 
     # Two steps rows, but ONE target: tested=1 (not 2) and wins=1 (not 2).
     assert board["H4"] == {"tested": 1, "wins": 1, "losses": 0, "score": 1}
+
+
+# ── 5. The printed verdict is a real, visible judgment — never an input ─────
+
+def test_verdict_labels_a_score_honestly_without_feeding_back_into_selection():
+    """_verdict (scripts/hypothesis_scoreboard.py) is the visible half of
+    "does this reward good ones and penalize bad ones": a positive score is
+    labeled encouraging, a negative one discouraging, and zero (untested or
+    tied) is labeled honestly as no signal — never implying a verdict the
+    data doesn't support. This is a pure function of an int; it is not
+    called from _select_style_hypothesis or anywhere in app/agents/draft.py
+    (confirmed by that ticket's own tests, which run the real selector and
+    never touch this module) — the judgment is real, acting on it is not."""
+    from scripts.hypothesis_scoreboard import _verdict
+
+    assert _verdict(1) == "encouraging"
+    assert _verdict(5) == "encouraging"
+    assert _verdict(-1) == "discouraging"
+    assert _verdict(-5) == "discouraging"
+    assert _verdict(0) == "no signal yet"

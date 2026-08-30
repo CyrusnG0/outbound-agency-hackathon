@@ -98,11 +98,14 @@ real win/loss record by reading the reply router's own trusted verdict, never a 
 classification the router itself didn't act on — the same confidence-floor discipline that
 governs every other decision in this system governs this measurement too.
 
-What it deliberately does **not** do: feed that score back into which hypothesis gets tried
-next. Selection stays a pure function of the target, unaffected by outcomes. Outcome-linked
-re-weighting — with the guardrails a responsible version needs (bounded weights, no
-drop-to-zero without a human, a full audit trail) — is specified but not built. A learning loop
-without its guardrails is worse than no learning loop at all.
+Each hypothesis's score prints alongside a plain-language verdict — encouraging, discouraging,
+or no signal yet — so the reward/penalty judgment is real and visible, not implied.
+
+What it deliberately does **not** do: feed that score, or its verdict, back into which
+hypothesis gets tried next. Selection stays a pure function of the target, unaffected by
+outcomes. Outcome-linked re-weighting — with the guardrails a responsible version needs
+(bounded weights, no drop-to-zero without a human, a full audit trail) — is specified but not
+built. A learning loop without its guardrails is worse than no learning loop at all.
 
 ## Architecture
 
@@ -130,7 +133,7 @@ without its guardrails is worse than no learning loop at all.
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 789 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 790 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -182,7 +185,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `789 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `790 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):
