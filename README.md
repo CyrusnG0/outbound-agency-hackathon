@@ -238,6 +238,21 @@ those checks live inside the transport itself. None of that exists in this repo 
 is not a config toggle away: enabling it means deliberately rewriting the test that currently
 guarantees it cannot happen.
 
+**Real Gmail read (fetching real replies)** is the same story, on the inbound side. Today's
+reply stage (`app/tools/fetch_inbox.py`) reads `.eml` files off disk — that file read *is* the
+fetch, by construction, not by config: the module's own docstring calls this "THE ABSOLUTE RULE,
+EXTENDED TO INBOUND," and the same AST-walking test that blocks an outbound mail transport
+(`tests/test_send_gate.py::test_app_imports_no_mail_transport`) blocks an inbound one too — there
+is no IMAP, no Gmail API, no OAuth, and no mailbox credential anywhere in this repo. Wiring one up
+would mean a second OAuth client (the `gmail.readonly` or `gmail.modify` scope this time),
+polling or a Pub/Sub push subscription for new mail, and replacing the `.eml`-directory scan with
+real `users.messages.list`/`get` calls — while keeping every downstream step unchanged: the same
+RFC `In-Reply-To`/`References` threading, the same mandatory PII redaction before anything is
+logged or classified, the same confidence-gated router. Reading real mail is lower-risk than
+sending it — nothing gets contacted, nothing leaves this system — but it is still not implemented,
+for the same reason: it wasn't required for this submission, and a real inbox integration deserves
+its own deliberate build, not a rushed one.
+
 ## Prior work
 
 Every line of application code in this repository was written during the hackathon submission
