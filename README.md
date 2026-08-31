@@ -11,6 +11,24 @@ through a single audited gate. Built for Google's **All Things Agentic Hackathon
 Self-use, one-operator harness. Not a SaaS platform, not multi-tenant, not a fully autonomous
 sender.
 
+## Try it right now — no login needed
+
+The console is live on Cloud Run. These four pages are open to anyone:
+
+| Page | What you see |
+|---|---|
+| **[/test-run](https://outbound-console-3gr2lqwk4a-uc.a.run.app/test-run)** | Real targets from a real batch. Click any one for its full audit trail. |
+| **[/test-run/run](https://outbound-console-3gr2lqwk4a-uc.a.run.app/test-run/run)** | Every logged step of one run, in order, with the inputs and outputs of each. |
+| **[/demo](https://outbound-console-3gr2lqwk4a-uc.a.run.app/demo)** | The follow-up call a positive reply actually booked, on a real computed calendar. |
+| **[/rules](https://outbound-console-3gr2lqwk4a-uc.a.run.app/rules)** | The scoring formula, all nine policy rules, and the full state-transition table. |
+
+Everything else — the full target list, the review queue, the kill switch — answers **401** to
+a request without credentials. That is the guarantee working, not a broken link. Operator
+credentials are in the Devpost submission's testing-instructions field.
+
+Those four pages are pre-rendered to disk ahead of time, so a credential-less request never
+opens a database connection at all.
+
 ## What it does
 
 One sentence in, four pipeline stages out:
@@ -83,12 +101,34 @@ full state-transition table, in one screen. It's hand-verified static text rathe
 import on purpose: importing the real constants would mean widening the console's own audited
 zero-write-path import allowlist, and that guarantee was worth more than the convenience.
 
-`/rules`, `/demo`, and `/test-run` (a static mirror of four real showcase targets and the run
+`/rules`, `/demo`, and `/test-run` (a static mirror of the real showcase targets and the run
 that reserved the real meeting) are reachable with **zero credentials** — an enumerated,
 no-wildcard carve-out in the same auth dependency that gates everything else, and every one of
 those pages is pre-rendered to disk ahead of time, so a public route never opens a database
 connection. Everything else — the full target list, the review queue, the kill switch — stays
 behind `OUTBOUND_CONSOLE_API_KEY`.
+
+## Check the safety claims yourself
+
+Every guarantee above is a test, not a paragraph. These five run in about a second and are the
+fastest way to confirm the claims are real rather than aspirational:
+
+```bash
+pytest \
+  "tests/test_send_gate.py::test_app_imports_no_mail_transport" \
+  "tests/test_send_gate.py::test_pyproject_declares_no_mail_transport_dependency" \
+  "tests/test_console.py::test_console_sql_is_select_only" \
+  "tests/test_send_gate.py::test_kill_switch_engaged_is_refused" \
+  "tests/test_adversarial_sim.py::test_adversarial_sim_has_no_raw_core_table_writes"
+```
+
+In order, they prove: no module in `app/` imports a mail transport; no dependency in
+`pyproject.toml` can send mail either; the console's own source contains no write-SQL; an
+engaged kill switch refuses a send that would otherwise pass every other check; and the
+adversarial corpus reaches the database only through the audited write gate.
+
+The interesting property is that four of these five read the repository's own source code and
+fail on what they find there. They cannot be satisfied by mocking.
 
 ## Real reply handling and real scheduling
 
@@ -145,7 +185,7 @@ built. A learning loop without its guardrails is worse than no learning loop at 
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 823 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 824 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -180,8 +220,8 @@ every contact email is a reserved `.test`-domain placeholder, never a real addre
 Requires Python ≥ 3.11.
 
 ```bash
-git clone <this-repo-url>
-cd outbound-agency
+git clone https://github.com/CyrusnG0/outbound-agency-hackathon.git
+cd outbound-agency-hackathon
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -197,7 +237,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `823 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `824 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):
