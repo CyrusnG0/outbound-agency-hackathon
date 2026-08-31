@@ -45,7 +45,7 @@ from app.agents_registry import seed_agent_registry  # the registry the write ga
 from app.db import apply_schema, connect  # fresh per-test SQLite database
 from app.ids import new_id  # fresh ids for seeded rows
 from app.phase1_cli import MAX_BATCH_SIZE  # the cap Z4 enforces — the test must fail if the cap itself drifts
-from app.schemas import DraftCritique, EmailDraft  # valid offline stand-in payloads for the draft stage
+from app.schemas import CompanyProfile, DraftCritique, EmailDraft, Signal  # valid offline stand-in payloads for the draft/research stages
 from app.tools.send_email import SendEmailResult  # the send runner's outcome shape the dispatch test fakes
 from app.write_gate import commit  # every seeded core-table row goes through the gate, never a raw INSERT
 from google.adk.agents import BaseAgent  # base class of the offline draft stand-ins (B1b pattern)
@@ -265,11 +265,19 @@ def _collect_transition_to_states(tree: ast.Module) -> list[str]:
 
 def test_no_approval_or_killswitch_capability_in_toolset(taskmaster_agent):
     """C4-Z1 + C4-Z3, structural half: the registered toolset is EXACTLY
-    the five stage/status tools — no approval tool, no review tool, no
+    the six stage/status tools — no approval tool, no review tool, no
     kill-switch tool — and no tool callable references the forbidden write
     identifiers.  The tool NAME list is the first thing a judge reads; the
     callable scan is what fails if someone adds the capability under a
-    friendly name."""
+    friendly name.
+
+    resume_pending_research (2026-08-31) is the sixth: it researches
+    targets already in the database at state "new" (never re-importing),
+    the recovery path for a batch that timed out partway through. It
+    carries no more capability than import_and_research/draft_for_scored
+    already had — same write_gate, same state_machine, no approval and no
+    switch write — so this list was updated deliberately, in the same
+    change that added the tool, per the assertion message below."""
     names = sorted(t.name for t in taskmaster_agent.tools)
     assert names == [
         "draft_for_scored",
@@ -277,6 +285,7 @@ def test_no_approval_or_killswitch_capability_in_toolset(taskmaster_agent):
         "fetch_and_classify_replies",
         "import_and_research",
         "report_pipeline_status",
+        "resume_pending_research",
     ], "the toolset is the capability set — an added tool is an added capability, reviewed deliberately"
     for tool in taskmaster_agent.tools:
         # co_names: every name the tool function's own code resolves at
@@ -465,6 +474,95 @@ def test_run_to_awaiting_review_stops_there_with_zero_review_rows(seeded, offers
         "SELECT agent_id, status FROM steps WHERE tool_name='taskmaster.draft_for_scored';"
     ).fetchone()
     assert step is not None and step["agent_id"] == TASKMASTER_AGENT_ID and step["status"] == "success"
+
+
+# ── resume_pending_research: the stuck-batch recovery tool (2026-08-31) ──────
+
+def test_resume_pending_research_moves_a_stuck_new_target_off_new_without_importing(seeded, offers_dir):
+    """The behavioural core of the recovery tool: a target already sitting
+    at state 'new' (simulating a prior import_and_research call that timed
+    out before researching it) is driven to a real terminal Phase 1 state
+    — WITHOUT any CSV path, WITHOUT calling import_csv, and WITHOUT
+    creating a second accounts/targets row. This is the exact scenario a
+    real run hit live: re-importing would have collided on the domain
+    that already exists; this tool must never even attempt that INSERT."""
+    _seed_target(seeded, target_id="tgt_1", state="new")
+    accounts_before = seeded.execute("SELECT COUNT(*) AS n FROM accounts;").fetchone()["n"]
+    targets_before = seeded.execute("SELECT COUNT(*) AS n FROM targets;").fetchone()["n"]
+
+    # Offline stand-ins for the research stage's LLM boundaries — the SAME
+    # recipe tests/test_agents_phase1.py's full-pipeline test uses, since
+    # this tool calls the identical run_target_through_phase1_async.
+    class _StubResearchAgent(BaseAgent):
+        def __init__(self):
+            super().__init__(name="research")
+
+        async def _run_async_impl(self, ctx):
+            yield Event(
+                author=self.name, invocation_id=ctx.invocation_id,
+                actions=EventActions(state_delta={"extracted_text": "Acme does logistics. Hiring ops manager."}),
+            )
+
+    fake_profile = CompanyProfile(one_line_summary="Acme does logistics", industry="Logistics", confidence=0.8)
+    fake_signals = [Signal(
+        signal_type="hiring_relevant_role", signal_value="Hiring ops manager",
+        signal_strength=0.8, evidence_quote="hiring an operations manager for the team",
+    )]
+
+    agent = _tool_by_name(build_taskmaster_agent(
+        seeded, run_id="run_1", offers_dir=str(offers_dir),
+        outbox_dir="unused", inbox_dir="unused",
+    ), "resume_pending_research")
+    with patch("app.agents.phase1.build_research_agent", return_value=_StubResearchAgent()), \
+         patch("app.tools.summarize_company.call_structured", return_value=fake_profile), \
+         patch("app.tools.detect_signals._call_detect_signals", return_value=fake_signals), \
+         patch("app.agents.phase1.judge_icp_module.judge_icp", return_value=None):
+        # tool.func is async — see draft_for_scored's test above for why
+        # asyncio.run() here (no event loop already running) is legal.
+        summary = asyncio.run(agent.func(limit=5))
+
+    row = seeded.execute("SELECT state FROM targets WHERE target_id='tgt_1';").fetchone()
+    assert row["state"] in ("scored", "watchlist", "not_target"), (
+        f"the target must reach a real terminal Phase 1 state, not stay 'new'; got {row['state']!r}"
+    )
+    assert row["state"] in summary, f"the summary must name the state reached; got: {summary!r}"
+    # ── The no-reimport proof: exactly zero new accounts/targets rows ──────
+    assert seeded.execute("SELECT COUNT(*) AS n FROM accounts;").fetchone()["n"] == accounts_before, (
+        "resume_pending_research must never create a new accounts row — it processes an EXISTING target"
+    )
+    assert seeded.execute("SELECT COUNT(*) AS n FROM targets;").fetchone()["n"] == targets_before, (
+        "resume_pending_research must never create a new targets row — no import happens here"
+    )
+    # ── Audited under the taskmaster principal, same convention as every
+    # other tool's outcome row ─────────────────────────────────────────────
+    step = seeded.execute(
+        "SELECT agent_id, status FROM steps WHERE tool_name='taskmaster.resume_pending_research';"
+    ).fetchone()
+    assert step is not None and step["agent_id"] == TASKMASTER_AGENT_ID and step["status"] == "success"
+
+
+def test_resume_pending_research_with_nothing_stuck_reports_so_and_writes_nothing(seeded, offers_dir):
+    """The empty-set path: no target at 'new' means nothing to resume — the
+    tool must say so plainly (never invent work) and touch no core table."""
+    write_log_before = seeded.execute("SELECT COUNT(*) AS n FROM write_log;").fetchone()["n"]
+    agent = _tool_by_name(build_taskmaster_agent(
+        seeded, run_id="run_1", offers_dir=str(offers_dir),
+        outbox_dir="unused", inbox_dir="unused",
+    ), "resume_pending_research")
+    summary = asyncio.run(agent.func(limit=5))
+    assert "no targets stuck" in summary
+    assert seeded.execute("SELECT COUNT(*) AS n FROM write_log;").fetchone()["n"] == write_log_before
+
+
+def test_resume_pending_research_over_cap_refused_with_no_rows_written(seeded, offers_dir):
+    """C4-Z4 applies here too: the same deterministic cap every stage tool
+    enforces, checked before any DB read of the stuck set."""
+    agent = _tool_by_name(build_taskmaster_agent(
+        seeded, run_id="run_1", offers_dir=str(offers_dir),
+        outbox_dir="unused", inbox_dir="unused",
+    ), "resume_pending_research")
+    summary = asyncio.run(agent.func(limit=MAX_BATCH_SIZE + 1))
+    assert summary.startswith("refused:") and str(MAX_BATCH_SIZE) in summary
 
 
 # ── C4-Z3 behavioural half: an engaged switch halts at entry ─────────────────

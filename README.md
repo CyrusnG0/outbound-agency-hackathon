@@ -140,7 +140,7 @@ built. A learning loop without its guardrails is worse than no learning loop at 
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 807 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 810 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -192,7 +192,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `807 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `810 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):

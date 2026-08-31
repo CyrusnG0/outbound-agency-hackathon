@@ -166,6 +166,8 @@ THE PIPELINE (docs/state-machine.md — each stage reads its own eligible set fr
 4. dry_run_send_approved — after the operator approves (state "approved"), write DRY_RUN .eml artifacts to the outbox. No real email exists anywhere in this system; "sent" here always means a file was written.
 5. fetch_and_classify_replies — read the simulated inbox and classify replies; all routing decisions are made by deterministic code, never by you.
 
+RECOVERING A STUCK BATCH: if import_and_research refuses with a duplicate-domain or account error, or report_pipeline_status shows targets sitting at state "new" left over from an earlier run, do NOT re-run import_and_research on the same CSV — it will refuse again for the same reason (the domains it tries to insert already exist). Call resume_pending_research instead: it researches targets already in the database at "new" without importing anything, so there is nothing left to collide with. After it finishes, call draft_for_scored as normal for anything that reached "scored".
+
 HARD RULES
 - BATCH CAP: every stage tool refuses batches over 15 targets (MAX_BATCH_SIZE) in its own code — this is not negotiable and not a hint. If a tool returns a refusal, report it verbatim. You may tell the operator the batch must be split into runs of at most 15; you may NOT silently run a smaller batch and claim the task was done.
 - HONESTY: report what the tools reported — counts, refusals, crashes, state names — nothing else. If a stage returned a refusal, say "refused: <the reason>". If a stage found no eligible targets, say so; that is the state machine's answer (usually the operator asked for a stage out of order), not a failure for you to fix by inventing work. Never claim success a tool did not report. A run in which the gate refused everything must be reported as refused.
@@ -612,6 +614,112 @@ def make_draft_for_scored_tool(conn, *, run_id: str, offers_dir: str) -> Functio
     return FunctionTool(draft_for_scored)
 
 
+# ── Tool 2b: resume_pending_research ─────────────────────────────────────────
+
+def make_resume_pending_research_tool(conn, *, run_id: str, offers_dir: str) -> FunctionTool:
+    """Build the ``resume_pending_research`` FunctionTool: research targets
+    already imported but never processed — WITHOUT calling import_csv.
+
+    Exists for one real failure mode this build hit live (2026-08-31):
+    import_and_research imports a whole CSV successfully, then runs out of
+    its wall-clock ceiling partway through researching it, leaving some
+    targets at state 'new'. Re-running the SAME CSV through
+    import_and_research calls import_csv again, which tries to INSERT a
+    fresh accounts row for a domain that already exists — Postgres's
+    accounts.normalized_domain UNIQUE constraint refuses it (23505), and
+    the ENTIRE import aborts before touching a single row, even ones that
+    were never stuck. This tool selects targets already sitting in the
+    database at 'new' and drives them straight through
+    run_target_through_phase1_async — the SAME per-target function
+    import_and_research itself calls — but skips import_csv entirely, so
+    there is nothing left to collide with.
+    """
+
+    async def resume_pending_research(limit: int = 10) -> str:
+        """Research every target stuck at state 'new' — already imported,
+        never processed, most often because a previous import_and_research
+        call ran out of its wall-clock ceiling partway through a batch.
+
+        Call this INSTEAD of import_and_research when report_pipeline_status
+        shows targets at 'new' left over from a prior run, or when
+        import_and_research itself refused with a duplicate-domain/account
+        error — re-importing the same CSV will refuse again for the exact
+        same reason. This tool imports nothing; it only processes targets
+        that already exist, so it is always safe to call even if you are
+        unsure whether anything is actually stuck.
+
+        Args:
+            limit: how many stuck targets to research (at most 15).
+
+        Returns:
+            A short summary: how many were found, the terminal state each
+            one reached, and any crashes — by target id.
+        """
+        # ── Z4: the SAME deterministic cap every stage tool enforces, before
+        # any DB or model work — a stuck batch is not an excuse to skip it.
+        refusal = _refuse_batch(limit)
+        if refusal is not None:
+            _record_tool_outcome(conn, run_id=run_id, tool_name="resume_pending_research", outcome=refusal, status="failed")
+            return refusal
+        # ── The stuck set: the one selector phase1.py exposes for this —
+        # never re-derived here, so this tool and any future recovery entry
+        # point read the exact same "who is stuck" definition.
+        target_ids = phase1_module.select_research_pending_targets(conn, limit=limit)
+        if not target_ids:
+            outcome = "resume_pending_research: no targets stuck at 'new' — nothing to resume."
+            _record_tool_outcome(conn, run_id=run_id, tool_name="resume_pending_research", outcome=outcome, status="success")
+            return outcome
+        # One compiled agent for the whole batch — the same phase1_cli/
+        # import_and_research pattern, never rebuilt per target.
+        agent = phase1_module.build_phase1_agent(conn)
+        results: dict[str, str] = {}  # target_id -> terminal Phase 1 state
+        crashed: dict[str, str] = {}  # target_id -> crash descriptor (the B1f split)
+        for target_id in target_ids:
+            # domain isn't carried by select_research_pending_targets (it
+            # returns bare ids, like select_draft_eligible_targets does) —
+            # looked up per target here, the SAME join phase1_cli.py uses
+            # right before calling this exact stage function.
+            row = conn.execute(
+                "SELECT a.normalized_domain AS domain FROM targets t "
+                "JOIN accounts a ON t.account_id = a.account_id WHERE t.target_id = ?;",
+                (target_id,),
+            ).fetchone()
+            domain = row["domain"]
+            try:
+                final_state = await phase1_module.run_target_through_phase1_async(
+                    agent, conn=conn, target_id=target_id, domain=domain,
+                    run_id=run_id, offers_dir=offers_dir,
+                )
+                results[target_id] = final_state
+            except Exception as exc:
+                # Same crash-containment discipline as draft_for_scored above
+                # (B1f): one target's crash must never abort the batch.
+                error_type, error_message = type(exc).__name__, str(exc)
+                print(
+                    f"ERROR: target {target_id} crashed resuming research — "
+                    f"{error_type}: {error_message}",
+                )
+                crashed[target_id] = _record_target_crash(
+                    conn, target_id=target_id, run_id=run_id,
+                    reason="unhandled_error_resume_research",
+                    tool_name="resume_pending_research_run",
+                    error_type=error_type, error_message=error_message,
+                )
+        lines = [
+            f"resume_pending_research: {len(target_ids)} target(s) selected, {len(results)} concluded.",
+        ]
+        for state_name in sorted(set(results.values())):
+            count = sum(1 for s in results.values() if s == state_name)
+            lines.append(f"{count} reached '{state_name}'.")
+        if crashed:
+            lines.append(f"{len(crashed)} CRASHED: " + "; ".join(f"{t}: {e}" for t, e in crashed.items()) + ".")
+        summary = "\n".join(lines)
+        _record_tool_outcome(conn, run_id=run_id, tool_name="resume_pending_research", outcome=summary, status="success")
+        return summary
+
+    return FunctionTool(resume_pending_research)
+
+
 # ── Tool 3: dry_run_send_approved ────────────────────────────────────────────
 
 def make_dry_run_send_approved_tool(conn, *, run_id: str, offers_dir: str, outbox_dir: str) -> FunctionTool:
@@ -959,11 +1067,11 @@ def build_taskmaster_agent(
     inbox_dir: str = DEFAULT_INBOX_DIR,
     kill_switch_path: str | None = None,
 ) -> LlmAgent:
-    """Build the Taskmaster root ``LlmAgent``: five FunctionTools over the
+    """Build the Taskmaster root ``LlmAgent``: six FunctionTools over the
     existing stage runners, a bounded tool budget, and the kill-switch
     guardrail at entry.
 
-    All five tools close over the live connection (the A4a constraint — a
+    All six tools close over the live connection (the A4a constraint — a
     DB connection can never enter ADK session state, so it travels in
     closures, never in the agent model or the session).  ``run_id`` is the
     CLI-created run identifier that every step row and gated write of this
@@ -987,13 +1095,18 @@ def build_taskmaster_agent(
         model=resolve_adk_model(TASKMASTER_MODEL_ALIAS),
         instruction=_TASKMASTER_INSTRUCTION,  # no {placeholders} — the instruction needs no per-run templating
         tools=[
-            # The five tools ARE the whole capability set — and, by
+            # The six tools ARE the whole capability set — and, by
             # construction, what is NOT here is the boundary (Z1/Z3):
             # there is no approval tool, no kill-switch tool, no send
             # tool beyond the DRY_RUN wrapper.  Adding one is a code
-            # change the AST tests in tests/test_taskmaster.py fail on.
+            # change the AST tests in tests/test_taskmaster.py fail on —
+            # resume_pending_research was added deliberately (2026-08-31,
+            # a real stuck-batch recovery need hit live) and that test's
+            # expected name list was updated in the same change, not
+            # silently widened.
             make_import_and_research_tool(conn, run_id=run_id, offers_dir=offers_dir),
             make_draft_for_scored_tool(conn, run_id=run_id, offers_dir=offers_dir),
+            make_resume_pending_research_tool(conn, run_id=run_id, offers_dir=offers_dir),
             make_dry_run_send_approved_tool(conn, run_id=run_id, offers_dir=offers_dir, outbox_dir=outbox_dir),
             make_fetch_and_classify_replies_tool(conn, run_id=run_id, inbox_dir=inbox_dir),
             make_report_pipeline_status_tool(conn, run_id=run_id),

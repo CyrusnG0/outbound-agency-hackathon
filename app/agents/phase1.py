@@ -1062,6 +1062,31 @@ async def run_target_through_phase1_async(
     return state["final_state"]
 
 
+def select_research_pending_targets(conn, *, limit: int) -> list[str]:
+    """The set of targets imported but never researched — state 'new'.
+
+    Exists for exactly one recovery scenario: an import_and_research call
+    imports a whole CSV successfully, then runs out of wall-clock time (or
+    crashes) before researching every row it just created. Those targets
+    sit at 'new' forever unless something processes them directly —
+    re-running the SAME CSV through import_csv fails outright the moment
+    any of its domains already exist (accounts.normalized_domain is
+    UNIQUE), so a fresh import is never the fix for a target already sitting
+    in the database. This is the single query the Taskmaster's
+    resume_pending_research tool selects through, mirroring the same
+    "one selector, one source of truth" precedent
+    select_draft_eligible_targets already set for the draft stage.
+    """
+    # state='new' is the ONLY terminal-of-import state a target can be
+    # stuck at before Phase 1 ever ran on it — 'scored'/'watchlist'/
+    # 'not_target'/'failed' all mean Phase 1 already concluded.
+    rows = conn.execute(
+        "SELECT target_id FROM targets WHERE state = 'new' ORDER BY created_at LIMIT ?;",
+        (limit,),
+    ).fetchall()
+    return [r["target_id"] for r in rows]
+
+
 def run_target_through_phase1(
     agent, *, conn, target_id: str, domain: str, run_id: str,
     offers_dir: str = DEFAULT_OFFERS_DIR,
