@@ -75,6 +75,13 @@ full state-transition table, in one screen. It's hand-verified static text rathe
 import on purpose: importing the real constants would mean widening the console's own audited
 zero-write-path import allowlist, and that guarantee was worth more than the convenience.
 
+`/rules`, `/demo`, and `/test-run` (a static mirror of four real showcase targets and the run
+that reserved the real meeting) are reachable with **zero credentials** — an enumerated,
+no-wildcard carve-out in the same auth dependency that gates everything else, and every one of
+those pages is pre-rendered to disk ahead of time, so a public route never opens a database
+connection. Everything else — the full target list, the review queue, the kill switch — stays
+behind `OUTBOUND_CONSOLE_API_KEY`.
+
 ## Real reply handling and real scheduling
 
 A reply routes to exactly one of nine outcomes: positive replies queue a follow-up draft;
@@ -133,7 +140,7 @@ built. A learning loop without its guardrails is worse than no learning loop at 
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 790 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 807 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -185,7 +192,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `790 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `807 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):
@@ -215,10 +222,21 @@ if a prerequisite is missing.
 ## What's next
 
 Unattended reply polling (Cloud Scheduler + Pub/Sub) — scoped, deliberately deferred; it isn't
-required for the Cloud infrastructure criterion, since Cloud SQL already satisfies it. Real
-Gmail send, gated behind the same human-approval console — a deliberate policy change from
-"DRY_RUN only, always" not yet made. More verticals via the existing offer/ICP YAML config, no
-new machinery required.
+required for the Cloud infrastructure criterion, since Cloud SQL already satisfies it. More
+verticals via the existing offer/ICP YAML config, no new machinery required.
+
+**Real Gmail send** stays a deliberate non-goal for this submission — this build enforces
+DRY_RUN by construction, not by a flag: a test walks every module in the repo and fails the
+suite if an SMTP or mail-transport import ever appears, so there is no live-send code path to
+accidentally enable. Wiring one up for real would mean registering a Google Cloud OAuth client
+with the `gmail.send` scope, storing a refresh token in Secret Manager next to the database
+credential, and replacing the DRY_RUN write in `send_email()` (`app/tools/send_email.py`,
+currently a file write to `data/outbox/{message_id}.eml` — that write *is* the send in this
+build) with a real `users.messages.send` call — behind the exact same `write_gate`,
+human-approval console, and kill switch that already gate every other action, since none of
+those checks live inside the transport itself. None of that exists in this repo today, and it
+is not a config toggle away: enabling it means deliberately rewriting the test that currently
+guarantees it cannot happen.
 
 ## Prior work
 

@@ -18,12 +18,35 @@ is on the console's import allowlist precisely because it is pure).
 Fail-closed doctrine (CLAUDE.md §3):
   - no secret configured  -> 503, the console refuses to serve anything
   - ambiguous credential  -> 401, never 500
-  - /_health              -> the ONE carve-out, because Cloud Run's health
-                             check must work and that route touches no data.
-                             Named /_health, NOT /healthz, because Google's
-                             Cloud Run frontend intercepts the exact path
-                             /healthz and it never reaches the container
-                             (ticket H16)
+  - PUBLIC_PATHS          -> the ONLY carve-outs.  Each is an exact, literal
+                             path served with ZERO database connection and
+                             ZERO write capability (see app/console/app.py
+                             for what each route actually does).  They are
+                             deliberately public so hackathon judges can click
+                             the demo without an API key:
+      - /_health        Cloud Run's health check must work and the route
+                        touches no data.  Named /_health, NOT /healthz,
+                        because Google's Cloud Run frontend intercepts the
+                        exact path /healthz and it never reaches the
+                        container (ticket H16).
+      - /rules          static hand-verified rulebook text — no query, no
+                        target data, no write action reachable from it.
+      - /demo           a FROZEN pre-rendered file (scripts/
+                        freeze_public_snapshot.py) — never a live DB read.
+      - /test-run, /test-run/mindnlife, /test-run/psychotherapy-counselling-
+        clinic, /test-run/focus2-intelligent-therapy,
+        /test-run/solacetree-counselling-limited, /test-run/run,
+        /test-run/run/steps.json
+                        the frozen static mirror of the main page + a run
+                        view, scoped to the four showcase targets — same
+                        freeze script, no DB touch, no write action.
+    This set stays an ENUMERATED set of exact literal strings, never a
+    prefix or wildcard match, on purpose: /_health's carve-out was a single
+    literal for the same reason, and widening it to a prefix would silently
+    unauthenticate every future path under it.  A route added to this
+    console in six months is NOT public by default; it must be deliberately
+    added to PUBLIC_PATHS here (and, for the frozen demo pages, generated
+    by the freeze script) before it becomes reachable without credentials.
   - NO disable/bypass flag of any kind.  The only way to run the console is
     with OUTBOUND_CONSOLE_API_KEY set.  A bypass flag is exactly the sort of
     thing that reaches production by accident, and this repo has already
@@ -35,6 +58,28 @@ import hmac
 import os
 
 from fastapi import HTTPException, Request
+
+# ── The public carve-out set ──────────────────────────────────────────────────
+# Every path in this set is served with ZERO database connection and ZERO
+# write capability — see app/console/app.py for what each one actually does.
+# This stays an ENUMERATED set of exact literal paths, never a prefix or
+# wildcard match, on purpose: the same no-wildcard reasoning /_health's
+# comment gives below (widening to a prefix would silently unauthenticate
+# every future path under it).  A route added to this console in six months
+# is NOT public by default; it must be deliberately added here before it
+# becomes reachable without credentials.
+PUBLIC_PATHS: frozenset[str] = frozenset({
+    "/_health",
+    "/rules",
+    "/demo",
+    "/test-run",
+    "/test-run/mindnlife",
+    "/test-run/psychotherapy-counselling-clinic",
+    "/test-run/focus2-intelligent-therapy",
+    "/test-run/solacetree-counselling-limited",
+    "/test-run/run",
+    "/test-run/run/steps.json",
+})
 
 
 def console_auth_secret() -> str | None:
@@ -97,15 +142,16 @@ def require_operator(request: Request) -> None:
     forgets.  This function is the entire decision; see the module docstring
     for the fail-closed rules.
     """
-    # The ONE carve-out.  Cloud Run's health check must reach /_health
-    # without credentials (ticket A5b), and that route touches no database
-    # and returns no data, so allowing it leaks nothing.  Anything else with
-    # this exact path is still protected — there is no wildcard here.
-    # The path is /_health, not /healthz (ticket H16): Google's Cloud Run
-    # frontend intercepts the exact path /healthz and it never reaches the
-    # container, so carving out /healthz would carve out a route that is
-    # unreachable in production.
-    if request.url.path == "/_health":
+    # The ONLY carve-outs, enumerated in PUBLIC_PATHS (see the module
+    # docstring and the constant's own comment): each is an exact literal
+    # path served with zero database connection and zero write capability,
+    # deliberately public so judges can click the demo without an API key.
+    # This is an EXACT membership check — `request.url.path in PUBLIC_PATHS`
+    # — never a startswith/prefix match, so a path that merely shares a
+    # prefix (e.g. /_health/details, /test-run-extra) is still protected.
+    # A route added to this console is NOT public by default; it must be
+    # deliberately added to PUBLIC_PATHS.
+    if request.url.path in PUBLIC_PATHS:
         return
 
     secret = console_auth_secret()

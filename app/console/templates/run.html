@@ -29,8 +29,19 @@
 <!-- The server-rendered run id, read by the script below through its data
      attribute (autoescaped by Jinja like every other value).  It MUST precede
      the <script> block: the inline script runs synchronously while the HTML
-     is still being parsed, so it can only read elements that already exist. -->
-<span id="run-data" data-run-id="{{ run_id }}" hidden></span>
+     is still being parsed, so it can only read elements that already exist.
+
+     data-static-steps-url is the STATIC-SNAPSHOT extension (the frozen
+     public demo mirror): when a caller (the freeze script rendering
+     app/console/static_snapshots/test_run_run.html) passes static_steps_url,
+     the page fetches that fixed URL ONCE instead of polling the live API.
+     Every existing caller (the live run_view route in app.py) does NOT pass
+     it, so the attribute renders empty and the polling behaviour below is
+     100% unchanged.  The value travels in a data attribute, not a Jinja
+     interpolation inside the <script>, because autoescape would HTML-escape
+     it there and script-block content is raw text (entities never decode)
+     — a data attribute is the one place autoescape is correct. -->
+<span id="run-data" data-run-id="{{ run_id }}" data-static-steps-url="{% if static_steps_url %}{{ static_steps_url }}{% endif %}" hidden></span>
 
 <!-- The live run's own styles live here (in the content block, not a new
      base.html block) so this page's additions stay self-contained and the
@@ -100,6 +111,14 @@ target's trace-log page.</p>
     // encodeURIComponent keeps the id safe in the URL even if a future id
     // format ever contains characters that are not path-safe.
     var API_URL = "/api/run/" + encodeURIComponent(RUN_ID) + "/steps";
+
+    // Static-snapshot mode (the frozen public demo mirror): when the server
+    // rendered data-static-steps-url (the freeze script's test_run_run.html),
+    // this holds the FIXED URL of the frozen steps JSON.  Empty string for
+    // every existing caller (the live run_view route never passes
+    // static_steps_url), which keeps the live polling behaviour below exactly
+    // as it was — this is strictly additive.
+    var STATIC_STEPS_URL = document.getElementById("run-data").dataset.staticStepsUrl || "";
 
     var listEl = document.getElementById("step-list");
     var statusEl = document.getElementById("run-status");
@@ -243,9 +262,48 @@ target's trace-log page.</p>
         });
     }
 
-    // Render immediately (first paint shows any steps that already exist),
-    // then poll on the interval.
-    poll();
+    function loadStaticSteps() {
+      // STATIC-SNAPSHOT mode: fetch the frozen steps JSON ONCE, no polling
+      // interval.  The data is frozen — it will never change — so continuing
+      // to poll a static file forever would be wasted client work, and a
+      // frozen public demo page must NEVER call the DB-backed live API
+      // (/api/run/...).  This branch fires only when the static route
+      // (test_run_run.html, served by /test-run/run) passes static_steps_url;
+      // the live run_view route never does, so every existing caller stays on
+      // the poll loop above and behaviour is 100% unchanged.
+      fetch(STATIC_STEPS_URL)
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          data.steps.forEach(renderStep);
+          renderTargetStates(data.target_states);
+          // A frozen run is by definition over — render the same "complete"
+          // verdict the live poll shows when it sees a stop condition, so the
+          // frozen page and the live page look identical to a judge.
+          var awaiting = Object.keys(data.target_states).filter(function (t) {
+            return data.target_states[t] === "awaiting_review";
+          });
+          if (awaiting.length > 0) {
+            stopPolling("RUN COMPLETE — " + awaiting.length + " target(s) are awaiting human review. A decision is waiting.", "complete");
+          } else {
+            stopPolling("Run complete — target(s) reached a terminal or post-gate state.", "complete");
+          }
+        })
+        .catch(function () {
+          // The frozen file is missing or unreadable — say so in a way that
+          // cannot be mistaken for a live run, and do not retry (a static
+          // file is not going to appear on a retry).
+          stopPolling("Stopped — could not load the frozen run data.", "stopped");
+        });
+    }
+
+    // Static-snapshot mode loads the frozen JSON once; every existing caller
+    // (static_steps_url unset) renders immediately and polls on the interval,
+    // exactly as before.
+    if (STATIC_STEPS_URL) {
+      loadStaticSteps();
+    } else {
+      poll();
+    }
   })();
 </script>
 {% endblock %}

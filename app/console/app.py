@@ -51,7 +51,7 @@ from typing import Any, Iterator
 from urllib.parse import urlencode  # query-string building for the post-decision redirects (refusal reason + outcome banner)
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -77,6 +77,17 @@ from app.review import ReviewDecisionRequest, ReviewOutcome, VALID_DECISIONS, re
 # console works no matter where uvicorn is started from.
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
+# ── Public demo snapshots ─────────────────────────────────────────────────────
+# The pre-rendered, DB-free files served by the PUBLIC /demo and /test-run
+# routes (see _serve_static_snapshot).  A human runs scripts/
+# freeze_public_snapshot.py against a real database to GENERATE these files;
+# the app itself NEVER writes here and NEVER opens a database connection for
+# them.  The directory may not exist yet in a fresh clone — the routes fail
+# with a readable 503 naming the script (never a 500, never an empty 200) when
+# a file is missing, so the app is safe to run public indefinitely even before
+# the operator has ever frozen a snapshot.
+_SNAPSHOTS_DIR = Path(__file__).resolve().parent / "static_snapshots"
+
 # fastapi.templating.Jinja2Templates builds its Environment with
 # autoescape=jinja2.select_autoescape() (verified against the installed
 # starlette 1.6.0 / jinja2 3.1.6 source), whose defaults enable escaping for
@@ -89,6 +100,45 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 # operator's own console is a stored-XSS vector. tests/test_console.py proves
 # the escaping behaviour end to end.
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+
+def _serve_static_snapshot(filename: str, media_type: str = "text/html") -> Response:
+    """Serve one pre-rendered file from _SNAPSHOTS_DIR as raw bytes.
+
+    The public demo routes (/demo, /test-run and its fixed sub-paths) call
+    this instead of querying the database: each file is rendered ahead of
+    time by scripts/freeze_public_snapshot.py (a human-run, inert-until-run
+    script), so a public, ZERO-credential route never opens a database
+    connection at request time.  The file is served byte-for-byte as stored,
+    with the given media type (HTML by default; the steps mirror is JSON).
+
+    FAIL-CLOSED, the same doctrine auth.py's missing-secret 503 uses: a
+    missing snapshot (the freeze script has never been run in this
+    environment) is a 503 that names the fix, NEVER a 500 stack trace and
+    NEVER an empty 200.  A public route that silently served an empty page
+    would look healthy while showing nothing; one that 500s would leak an
+    exception to an anonymous caller.  A 503 saying "run this script" is the
+    honest, self-diagnosing failure.
+    """
+    # The file path is built from a code-literal filename (never user input),
+    # scoped to _SNAPSHOTS_DIR, so this helper can never read outside the
+    # snapshots directory.
+    path = _SNAPSHOTS_DIR / filename
+    if not path.is_file():
+        # Missing snapshot — name the script that produces it so the operator
+        # (or a judge who hit the route before the operator froze anything)
+        # knows exactly what to run, instead of guessing.
+        raise HTTPException(
+            status_code=503,
+            detail=f"The public snapshot {filename!r} has not been generated "
+            "yet. Run scripts/freeze_public_snapshot.py against this "
+            "database to generate the static demo files.",
+        )
+    # Read the whole file and hand it back with the exact media type.  The
+    # content is pre-rendered HTML/JSON generated from real data by the
+    # freeze script — it is trusted static content, not a live query, so this
+    # route holds no SQL and no write path of any kind.
+    return Response(content=path.read_bytes(), media_type=media_type)
 
 
 # ── Database access ───────────────────────────────────────────────────────────
@@ -1075,25 +1125,73 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/demo")
-    def demo_showcase(request: Request, conn: Conn = Depends(get_conn)) -> HTMLResponse:
+    def demo_showcase() -> Response:
         # One screen for the moments worth showing a judge: links to the four
-        # real showcase targets (never re-queried in depth here — each links
-        # out to its own real /targets or /review page for the full audit
-        # trail) and the most recently reserved real meeting plus the
-        # follow-up draft whose footer states it. Pure convenience for the
-        # operator running a live demo; adds no write path, no new app.*
-        # import, and no data that isn't already visible elsewhere in the
-        # console.
-        payload = _fetch_demo_showcase(conn)
-        return templates.TemplateResponse(
-            request, "demo.html", {
-                "showcase": payload["showcase"],
-                "meeting": payload["meeting"],
-                "meeting_draft": payload["meeting_draft"],
-                "demo_data": _is_demo_database(conn),
-                "replay_mode": _replay_mode(),
-            }
-        )
+        # real showcase targets and the most recently reserved real meeting
+        # plus the follow-up draft whose footer states it.  CHANGED
+        # (static-snapshot ticket): this route used to query the live
+        # database per request; it now serves a FROZEN file the operator
+        # generates with scripts/freeze_public_snapshot.py.  The page is in
+        # PUBLIC_PATHS (auth.py) — reachable with ZERO credentials so judges
+        # can click it without an API key — so it must never open a database
+        # connection at request time; the freeze script does that querying
+        # once, ahead of time, and this route only reads the result off disk.
+        # No write path, no new app.* import, no live data that isn't already
+        # visible elsewhere in the console.
+        return _serve_static_snapshot("demo.html")
+
+    # ── Public test-run mirror (static-snapshot ticket) ────────────────────
+    # /test-run and its fixed sub-paths are a static mirror of "the main page
+    # + a run view", scoped to the SAME four curated showcase targets /demo
+    # links to (the _SHOWCASE_TARGETS list above) — never the full unfiltered
+    # `/` targets table.  Every route is a LITERAL path, no {id}-style path
+    # parameter and no prefix/wildcard match: the same no-wildcard doctrine
+    # auth.py's PUBLIC_PATHS documents (a route added later is NOT public by
+    # default; it must be deliberately enumerated there).  Every route is
+    # GET-only, opens NO database connection, and serves a file pre-rendered
+    # by scripts/freeze_public_snapshot.py — a public, zero-credential page
+    # must never touch the real DB or expose any write action.
+
+    @app.get("/test-run")
+    def test_run_index() -> Response:
+        # The frozen mirror of the index page, but filtered to ONLY the four
+        # showcase targets (the freeze script renders targets.html with a
+        # WHERE clause scoped to _SHOWCASE_TARGETS — never the full table).
+        return _serve_static_snapshot("test_run_index.html")
+
+    @app.get("/test-run/mindnlife")
+    def test_run_target_mindnlife() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_mindnlife.html")
+
+    @app.get("/test-run/psychotherapy-counselling-clinic")
+    def test_run_target_psychotherapy() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_psychotherapy-counselling-clinic.html")
+
+    @app.get("/test-run/focus2-intelligent-therapy")
+    def test_run_target_focus2() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_focus2-intelligent-therapy.html")
+
+    @app.get("/test-run/solacetree-counselling-limited")
+    def test_run_target_solacetree() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_solacetree-counselling-limited.html")
+
+    @app.get("/test-run/run")
+    def test_run_run() -> Response:
+        # The frozen live-run view for the run tied to Solacetree's real
+        # scheduled meeting.  Its inline script is served the frozen steps
+        # JSON (static_steps_url) so the page never polls a DB-backed API.
+        return _serve_static_snapshot("test_run_run.html")
+
+    @app.get("/test-run/run/steps.json")
+    def test_run_steps() -> Response:
+        # The frozen JSON mirror of GET /api/run/{run_id}/steps — the exact
+        # payload the live API returns, dumped to disk by the freeze script
+        # so the frozen run page can render without a DB connection.
+        return _serve_static_snapshot("test_run_steps.json", media_type="application/json")
 
     @app.get("/rules")
     def rules(request: Request) -> HTMLResponse:

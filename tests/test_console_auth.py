@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 
 from app.agents_registry import seed_agent_registry
 from app.console.app import app
-from app.console.auth import console_auth_secret, require_operator
+from app.console.auth import PUBLIC_PATHS, console_auth_secret, require_operator
 from app.db import apply_schema, connect
 
 # The secret the "valid credential" tests use.  Chosen to be distinct from any
@@ -58,9 +58,52 @@ READ_ROUTES = [
     ("get", "/review/queue"),
     ("get", "/api/review/queue"),
     ("get", "/review/tgt_1"),
-    # /demo (operator request, 2026-08-30): a read-only page, so it goes
-    # through the same auth dependency as every other GET here.
-    ("get", "/demo"),
+    # /demo is NOT here: it moved to the PUBLIC_PATHS carve-out (the
+    # static-snapshot ticket) and is tested separately as a public route.
+]
+
+# ── The public carve-out set (static-snapshot ticket) ─────────────────────────
+# The routes reachable with ZERO credentials and ZERO database connection.
+# This mirrors app/console/auth.py's PUBLIC_PATHS exactly — /rules, /demo,
+# /test-run and its six fixed sub-paths — so a drift between this test list
+# and the auth constant is a deliberate, visible edit.
+PUBLIC_ROUTES = [
+    "/rules",
+    "/demo",
+    "/test-run",
+    "/test-run/mindnlife",
+    "/test-run/psychotherapy-counselling-clinic",
+    "/test-run/focus2-intelligent-therapy",
+    "/test-run/solacetree-counselling-limited",
+    "/test-run/run",
+    "/test-run/run/steps.json",
+]
+
+# Every file the static routes serve off disk (app/console/app.py's
+# _serve_static_snapshot).  The snapshot fixture writes one minimal file per
+# name so the 200 path is exercised — never just the 503 fallback.
+SNAPSHOT_FILES = [
+    "demo.html",
+    "test_run_index.html",
+    "test_run_target_mindnlife.html",
+    "test_run_target_psychotherapy-counselling-clinic.html",
+    "test_run_target_focus2-intelligent-therapy.html",
+    "test_run_target_solacetree-counselling-limited.html",
+    "test_run_run.html",
+    "test_run_steps.json",
+]
+
+# The HTML routes in the public set — the JSON mirror (steps.json) is not
+# HTML and is excluded from the no-action-surface content checks.
+PUBLIC_HTML_ROUTES = [
+    "/rules",
+    "/demo",
+    "/test-run",
+    "/test-run/mindnlife",
+    "/test-run/psychotherapy-counselling-clinic",
+    "/test-run/focus2-intelligent-therapy",
+    "/test-run/solacetree-counselling-limited",
+    "/test-run/run",
 ]
 
 
@@ -121,6 +164,38 @@ def no_secret_client(monkeypatch, tmp_path):
     return TestClient(app)
 
 
+@pytest.fixture
+def snapshot_client(monkeypatch, tmp_path):
+    """A TestClient with NO secret, NO database, and a tmp snapshots directory
+    holding minimal fixture files for every static route.
+
+    This is the fixture that proves the PUBLIC carve-out end to end: the
+    routes reachable with ZERO credentials must ALSO open ZERO database
+    connections, so the client is deliberately configured with
+    OUTBOUND_CONSOLE_API_KEY deleted and OUTBOUND_DB_TARGET pointed at a path
+    whose parent directory does not exist (any connect attempt — even
+    sqlite's implicit file creation — would fail).  The routes serve the
+    fixture files from the tmp snapshots dir (monkeypatched over
+    app.console.app._SNAPSHOTS_DIR) so the 200 path is genuinely exercised,
+    not just the 503 fallback.  /rules renders a template and needs no
+    snapshot file; it is covered here too for the same public/no-DB proof.
+    """
+    snap_dir = tmp_path / "snapshots"
+    snap_dir.mkdir()
+    for name in SNAPSHOT_FILES:
+        # Minimal content — deliberately NO <form>, no /review/decision, no
+        # /kill-switch — so the no-action-surface content checks can run
+        # against these same fixtures.
+        (snap_dir / name).write_text(
+            f"<html><body><h1>FROZEN-{name}</h1></body></html>", encoding="utf-8"
+        )
+    monkeypatch.setattr("app.console.app._SNAPSHOTS_DIR", snap_dir)
+    monkeypatch.delenv("OUTBOUND_CONSOLE_API_KEY", raising=False)
+    monkeypatch.setenv("OUTBOUND_DB_TARGET", str(tmp_path / "no_such_dir" / "auth.db"))
+    monkeypatch.delenv("OUTBOUND_REPLAY_MODE", raising=False)
+    return TestClient(app)
+
+
 # ── The H11 regression, first and loudest ─────────────────────────────────────
 
 
@@ -148,6 +223,96 @@ def test_unauth_read_route_returns_401(authd_client, method, path):
     audit trail."""
     resp = getattr(authd_client, method)(path)
     assert resp.status_code == 401
+
+
+# ── The public carve-out behaviour (static-snapshot ticket) ───────────────────
+# The routes in PUBLIC_PATHS are reachable with ZERO credentials and ZERO
+# database connection.  The snapshot_client fixture proves both halves at
+# once: it sends no credential (OUTBOUND_CONSOLE_API_KEY deleted) and its DB
+# target points at a nonexistent parent dir (any connect attempt — even
+# sqlite's implicit file creation — would fail).  These tests pin that the
+# public set stays public, stays action-free, stays GET-only, and — the
+# regression half — that EVERYTHING ELSE stays behind the gate.
+
+@pytest.mark.parametrize("path", PUBLIC_ROUTES)
+def test_public_routes_reachable_with_zero_credentials(snapshot_client, path):
+    """Every PUBLIC_PATHS route answers 200 to an anonymous, DB-less request.
+
+    The snapshot_client fixture is the whole proof: no credential is sent
+    (OUTBOUND_CONSOLE_API_KEY is deleted) and the DB target points at a
+    nonexistent parent directory, so a route that opened a connection would
+    fail even sqlite's implicit file creation.  A 200 here means the request
+    passed the PUBLIC_PATHS carve-out AND never touched a database."""
+    resp = snapshot_client.get(path)
+    # The 200-with-no-DB proof is built into the fixture (see its docstring);
+    # assert it explicitly per path so the public set cannot silently regress
+    # to a 503 (missing secret) or a 500 (DB connect attempt).
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("path", PUBLIC_HTML_ROUTES)
+def test_public_html_routes_expose_no_action_surface(snapshot_client, path):
+    """A zero-credential page must not reach an action: no <form>, no
+    review-decision POST URL, no kill-switch POST URL.
+
+    The fixture files are deliberately free of these strings (see the
+    snapshot_client fixture), so this is a regression guard for FUTURE edits
+    to the real templates / frozen files — the moment someone adds a decision
+    or toggle form to a public page, it fails here."""
+    resp = snapshot_client.get(path)
+    assert resp.status_code == 200
+    body = resp.text
+    # The literal substrings, exactly as the real review/decision and
+    # kill-switch routes are spelled — a public page must not even link to
+    # them, let alone host a form that POSTs to them.
+    assert "<form" not in body
+    assert "/review/decision" not in body
+    assert "/kill-switch" not in body
+
+
+def test_public_paths_map_to_get_only_routes():
+    """Every path in PUBLIC_PATHS names a route registered as GET-only.
+
+    A public route that also accepted POST/PUT/DELETE would be an
+    unauthenticated mutation vector — the exact class H11 closes.  This walks
+    app.routes and asserts that no path in the public set accepts any method
+    outside {GET}."""
+    # Build {path: set-of-HTTP-methods} from the app's routes.  APIRoute
+    # carries .methods as a set; route types without .methods (none today)
+    # are skipped here — a future Mount would fail the /_health-coverage
+    # guard (test_every_route_except_health_is_covered_by_global_auth)
+    # instead, which is the right place for that failure.
+    methods_by_path: dict[str, set[str]] = {}
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path is None or methods is None:
+            continue
+        methods_by_path.setdefault(path, set()).update(methods)
+    # Every public path must exist AND accept nothing but GET.
+    for path in PUBLIC_PATHS:
+        assert path in methods_by_path, (
+            f"{path!r} is in PUBLIC_PATHS but no console route is registered "
+            f"at that exact path"
+        )
+        assert methods_by_path[path] <= {"GET"}, (
+            f"{path!r} is public but accepts {methods_by_path[path]} — public "
+            f"routes must be GET-only (H11)"
+        )
+
+
+def test_routes_outside_public_paths_still_require_auth(authd_client):
+    """The carve-out is EXACT: everything NOT in PUBLIC_PATHS stays 401.
+
+    A public route that grew a sibling (a typo'd prefix, a new /test-run-*
+    path) would silently widen the carve-out; this pins that the ordinary
+    routes the console serves are still behind the gate.  Uses authd_client
+    (a valid secret configured, no credential sent) — the same convention as
+    test_unauth_read_route_returns_401 — so a 401 is the auth layer firing,
+    not a 503 from a missing secret."""
+    for path in ("/", "/review/queue", "/run/run_1", "/targets/tgt_1"):
+        resp = authd_client.get(path)
+        assert resp.status_code == 401
 
 
 # ── Valid credentials are accepted ────────────────────────────────────────────

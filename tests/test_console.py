@@ -33,7 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agents_registry import seed_agent_registry
-from app.console.app import app
+from app.console.app import _fetch_demo_showcase, app, templates
 from app.db import apply_schema, connect
 from app.state_machine import transition
 from app.tools.log_step import log_step
@@ -401,21 +401,35 @@ def test_api_unknown_target_is_404(client):
 # ── /demo: the one-screen live-demo jumping-off page (operator request, 2026-08-30) ──
 
 
-def test_demo_page_degrades_cleanly_when_no_showcase_names_match(client):
+def test_demo_page_degrades_cleanly_when_no_showcase_names_match(db_path):
     # The base db_path fixture seeds "Acme Therapeutics", not any of the
     # four hardcoded showcase company names — this proves the
     # mark-don't-drop path: a showcase name absent from the database
     # renders an explicit "not available" cell instead of a KeyError/500,
     # and the meeting/draft sections render their own explicit empty
     # states when no meetings row exists at all.
-    resp = client.get("/demo")
-    assert resp.status_code == 200
-    assert resp.text.count("not available in this database") == 4
-    assert "No meeting reserved in this database yet" in resp.text
-    assert "No follow-up draft found for this meeting's target" in resp.text
+    # /demo now serves a frozen file (static-snapshot ticket), so this test
+    # drives _fetch_demo_showcase + the demo.html render directly — the same
+    # two calls scripts/freeze_public_snapshot.py makes — instead of the HTTP
+    # route (which opens no database connection by design).
+    conn = connect(db_path)
+    try:
+        payload = _fetch_demo_showcase(conn)
+    finally:
+        conn.close()
+    html = templates.env.get_template("demo.html").render(
+        showcase=payload["showcase"],
+        meeting=payload["meeting"],
+        meeting_draft=payload["meeting_draft"],
+        demo_data=False,
+        replay_mode=False,
+    )
+    assert html.count("not available in this database") == 4
+    assert "No meeting reserved in this database yet" in html
+    assert "No follow-up draft found for this meeting's target" in html
 
 
-def test_demo_page_shows_real_showcase_links_and_scheduled_meeting(client, db_path):
+def test_demo_page_shows_real_showcase_links_and_scheduled_meeting(db_path):
     # A second, targeted seed: one showcase name resolved to a target still
     # awaiting_review, a real meetings row reserved for it, and the
     # follow-up draft whose footer states that reservation.
@@ -484,28 +498,39 @@ def test_demo_page_shows_real_showcase_links_and_scheduled_meeting(client, db_pa
     )
     conn.close()
 
-    # `client` already points OUTBOUND_DB_TARGET at this same db_path (the
-    # fixture dependency chain: client depends on db_path) — the rows just
-    # inserted above are visible to it without any extra wiring.
-    resp = client.get("/demo")
-    assert resp.status_code == 200
+    # /demo now serves a frozen file (static-snapshot ticket), so this test
+    # drives _fetch_demo_showcase + the demo.html render directly — the same
+    # two calls scripts/freeze_public_snapshot.py makes — instead of the HTTP
+    # route (which opens no database connection by design).
+    conn = connect(db_path)
+    try:
+        payload = _fetch_demo_showcase(conn)
+    finally:
+        conn.close()
+    html = templates.env.get_template("demo.html").render(
+        showcase=payload["showcase"],
+        meeting=payload["meeting"],
+        meeting_draft=payload["meeting_draft"],
+        demo_data=False,
+        replay_mode=False,
+    )
     # The awaiting_review showcase target links to the review/decision
     # screen, not the plain audit-trail page.
-    assert "/review/tgt_sol" in resp.text
+    assert "/review/tgt_sol" in html
     # The real reservation's fields render on the meeting section.
-    assert "2026-09-01T10:30:00+08:00" in resp.text
-    assert "earliest available slot" in resp.text
+    assert "2026-09-01T10:30:00+08:00" in html
+    assert "earliest available slot" in html
     # The draft shown is the SECOND revision's subject (the one whose
     # footer actually states the reservation), not the first's.
-    assert "Second subject" in resp.text
-    assert "We&#39;ve held" in resp.text or "We've held" in resp.text
+    assert "Second subject" in html
+    assert "We&#39;ve held" in html or "We've held" in html
     # The removed artifact link must never resurface anywhere on this page.
-    assert "claude.ai" not in resp.text
+    assert "claude.ai" not in html
     # Three showcase names still don't resolve in this database.
-    assert resp.text.count("not available in this database") == 3
+    assert html.count("not available in this database") == 3
 
 
-def test_demo_page_no_longer_lists_mark_boyden_associates(client):
+def test_demo_page_no_longer_lists_mark_boyden_associates(db_path):
     # 2026-08-30: Mark Boyden Associates was pulled from _SHOWCASE_TARGETS
     # (app/console/app.py) because its real follow-up draft predates the
     # real scheduling feature and its stored footer still states the old
@@ -516,9 +541,23 @@ def test_demo_page_no_longer_lists_mark_boyden_associates(client):
     # live database, an ordinary operator review decision, not a code
     # change). This test locks the delisting in so the name can't silently
     # reappear in a future edit of the showcase list.
-    resp = client.get("/demo")
-    assert resp.status_code == 200
-    assert "Mark Boyden Associates" not in resp.text
+    # /demo now serves a frozen file (static-snapshot ticket), so this test
+    # drives _fetch_demo_showcase + the demo.html render directly — the same
+    # two calls scripts/freeze_public_snapshot.py makes — instead of the HTTP
+    # route (which opens no database connection by design).
+    conn = connect(db_path)
+    try:
+        payload = _fetch_demo_showcase(conn)
+    finally:
+        conn.close()
+    html = templates.env.get_template("demo.html").render(
+        showcase=payload["showcase"],
+        meeting=payload["meeting"],
+        meeting_draft=payload["meeting_draft"],
+        demo_data=False,
+        replay_mode=False,
+    )
+    assert "Mark Boyden Associates" not in html
 
 
 # ── /rules: the one-screen rulebook (operator request, 2026-08-30) ────────────
