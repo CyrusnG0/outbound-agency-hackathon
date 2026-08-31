@@ -1,0 +1,20 @@
+# New offer (2026-08-31, operator request) — AI agent security review.
+# Same file shape as config/offers/therapy-app.yaml: pitch, persona_hint,
+# template, from_address, icp. No code change needed — offers are pure
+# config, synced by app.config.sync_offers_table() on every pipeline run,
+# exactly like every other vertical.
+#
+# from_address is a placeholder — Phase 1 (research/score) never reads it,
+# so it's inert for this run, exactly as documented in therapy-app.yaml.
+pitch: "We audit AI agent deployments for unsafe tool use, prompt injection exposure, and missing human-approval gates before they reach production."
+persona_hint: "Founder, CTO, or head of engineering at a company shipping an AI agent product."
+template: "default_outreach_v1"
+from_address: "outreach@REPLACE-ME-BEFORE-SENDING.test"
+scheduling_enabled: true
+icp:
+  geography: "global"
+  company_size: "any size that has shipped or is about to ship an autonomous or semi-autonomous AI agent product"
+  industry: "AI agent frameworks, AI agent products, or AI-powered automation platforms"
+  disqualifiers:
+    - "no AI agent or autonomous automation product (pure traditional SaaS with no agent/LLM component)"
+    - "agent security or agent safety auditing is itself their own core product (a competitor, not a customer)"

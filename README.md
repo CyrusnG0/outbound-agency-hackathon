@@ -108,6 +108,30 @@ those pages is pre-rendered to disk ahead of time, so a public route never opens
 connection. Everything else — the full target list, the review queue, the kill switch — stays
 behind `OUTBOUND_CONSOLE_API_KEY`.
 
+## A second vertical, with no code change
+
+The pipeline was built against HK therapy clinics. Adding a completely different market — AI
+agent security review, selling to AI framework companies — took one file
+(`config/offers/ai-security.yaml`: pitch, persona hint, ICP, disqualifiers) and a CSV of
+company names. No new agent, no new prompt, no new branch, no code diff of any kind. Offers
+are pure config, synced into the database on every run.
+
+```bash
+python -m app.phase1_cli --csv data/ai_security_10co_batch.csv --db data/outbound.db --offers-dir config/offers
+```
+
+Both batches are in the live console, scored against their own separate ICPs by the same
+agents. The ICP disqualifiers do real work here: "agent security auditing is itself their own
+core product" is what makes the judge reject a competitor rather than pitch to them.
+
+To be precise, since it's a checkable claim — run `grep -rn "ai-security\|therapy-app" app/`
+yourself. Every `ai-security` hit is either the demo page's hand-written captions or
+pre-rendered snapshot HTML. `therapy-app` also appears as a comment or docstring in the agents
+and tools, as the demo seeder's `DEMO_OFFER_SLUG` constant, and in the adversarial harness's
+fixtures. In the pipeline proper — the agents, tools, policy, state machine, and write gate —
+every single mention is a comment. Nothing executable branches on which offer is running; the
+pipeline reads whichever offer the CSV's `offer_id` column points at.
+
 ## Check the safety claims yourself
 
 Every guarantee above is a test, not a paragraph. These five run in about a second and are the
@@ -279,8 +303,7 @@ if a prerequisite is missing.
 ## What's next
 
 Unattended reply polling (Cloud Scheduler + Pub/Sub) — scoped, deliberately deferred; it isn't
-required for the Cloud infrastructure criterion, since Cloud SQL already satisfies it. More
-verticals via the existing offer/ICP YAML config, no new machinery required.
+required for the Cloud infrastructure criterion, since Cloud SQL already satisfies it.
 
 **Real Gmail send** stays a deliberate non-goal for this submission — this build enforces
 DRY_RUN by construction, not by a flag: a test walks every module in the repo and fails the
