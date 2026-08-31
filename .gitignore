@@ -30,3 +30,6 @@ data/replay_kill_switch.json
 # checked-in inbox fixtures (data/inbox/01_interested_reply.eml etc., and
 # demo_reply_*.eml — both real source, still tracked below this line).
 data/inbox/convo_*.eml
+
+# macOS Finder metadata
+.DS_Store
