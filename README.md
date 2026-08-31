@@ -120,9 +120,12 @@ are pure config, synced into the database on every run.
 python -m app.phase1_cli --csv data/ai_security_10co_batch.csv --db data/outbound.db --offers-dir config/offers
 ```
 
-Both batches are in the live console, scored against their own separate ICPs by the same
-agents. The ICP disqualifiers do real work here: "agent security auditing is itself their own
-core product" is what makes the judge reject a competitor rather than pitch to them.
+Both batches are in the database behind the operator console, scored against their own
+separate ICPs by the same agents — sign in with the credentials in the Devpost testing field
+to see them. (The zero-credential `/test-run` mirror is a frozen subset showing the therapy
+batch only; it is a pre-rendered snapshot, not a live view of everything.) The ICP
+disqualifiers do real work here: "agent security auditing is itself their own core product"
+is what makes the judge reject a competitor rather than pitch to them.
 
 To be precise, since it's a checkable claim — run `grep -rn "ai-security\|therapy-app" app/`
 yourself. Every `ai-security` hit is either the demo page's hand-written captions or
