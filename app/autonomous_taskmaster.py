@@ -16,11 +16,13 @@
 # performs the action." This module applies the same split to loop
 # termination. Each iteration, the model is TOLD what to try (research
 # anything stuck at 'new', draft anything scored) -- but whether the RUN
-# has finished is decided here, in code, by directly reading the same two
-# selector functions the stage tools themselves select through
-# (select_research_pending_targets, select_draft_eligible_targets). A
-# model's own "I think I'm done" is not proof of anything; an empty
-# selector result is. This mirrors the "structured outputs over free-form
+# has finished is decided here, in code, by directly reading the same
+# selector/precondition functions the stage tools themselves select
+# through (select_research_pending_targets, select_draft_eligible_targets,
+# has_allow_policy_decision -- the last one added 2026-09-01, ticket H4, so
+# a permanently policy_denied target reads as "done", not "still pending"
+# forever). A model's own "I think I'm done" is not proof of anything; an
+# empty selector result is. This mirrors the "structured outputs over free-form
 # reasoning" priority in CLAUDE.md #1.
 #
 # BOUNDED, NOT "LOOP FOREVER": CLAUDE.md's golden rules say retries must be
@@ -42,7 +44,7 @@ import argparse  # stdlib argument parser -- no new dependency for the operator
 import sys  # stderr for the final bound-exceeded message
 import time  # time.monotonic() for the elapsed-time report -- never wall-clock time, which can jump
 
-from app.agents.draft import select_draft_eligible_targets  # the draft stage's own "who is eligible" source of truth -- never re-derived here
+from app.agents.draft import has_allow_policy_decision, select_draft_eligible_targets  # the draft stage's own "who is eligible" / "will policy let this through" sources of truth -- never re-derived here
 from app.agents.phase1 import select_research_pending_targets  # the research stage's own "who is stuck at new" source of truth -- same reuse discipline
 from app.db import apply_schema, connect  # opens the DB and applies the (idempotent) DDL, exactly like every CLI entry point
 from app.taskmaster_cli import main as taskmaster_main  # the UNMODIFIED per-invocation entry point this module loops -- reused, not reimplemented
@@ -77,6 +79,21 @@ def _pending_count(db_path: str, *, offers_dir: str) -> tuple[int, int]:
     thing that goes stale mid-loop. `offers_dir` is accepted for call-site
     symmetry with the rest of this module even though neither selector
     reads it; it is not otherwise used here.
+
+    The draft count is further filtered to targets has_allow_policy_decision
+    actually lets through (ticket H4, 2026-09-01): select_draft_eligible_targets
+    alone answers "who is in state='scored' (or routed-with-follow-up)",
+    which stays true FOREVER for a policy_denied target -- a refusal is not
+    a state transition, by design (CLAUDE.md: refusals must surface to the
+    operator, never be silently pre-filtered away in the selection query
+    itself). Left unfiltered, this stopping check would report the same
+    permanently-refused targets as "still pending" every iteration, and the
+    loop would burn real Gemini calls re-discovering the same refusal up to
+    the full --max-iterations bound instead of recognising "nothing left it
+    can do" after the first pass. A target excluded here for a bad policy
+    decision needs fresh research (a new policy_decisions row), which is
+    outside what this task's draft-only recovery can fix -- exactly why it
+    must count as NOT pending rather than trigger another iteration.
     """
     del offers_dir  # unused -- kept in the signature for symmetry, not silently dropped without a name
     conn = connect(db_path)
@@ -87,7 +104,14 @@ def _pending_count(db_path: str, *, offers_dir: str) -> tuple[int, int]:
         # still applies INSIDE resume_pending_research/draft_for_scored
         # themselves, unaffected by this number.
         pending_research = len(select_research_pending_targets(conn, limit=1000))
-        pending_draft = len(select_draft_eligible_targets(conn, limit=1000))
+        draft_eligible = select_draft_eligible_targets(conn, limit=1000)
+        # Narrow "eligible by state" down to "can actually still succeed" --
+        # the same has_allow_policy_decision the draft stage's own
+        # precondition 2 enforces, so this can never drift from what
+        # draft_for_scored would really do with these targets.
+        pending_draft = sum(
+            1 for target_id in draft_eligible if has_allow_policy_decision(conn, target_id)
+        )
         return pending_research, pending_draft
     finally:
         conn.close()

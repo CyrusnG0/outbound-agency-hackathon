@@ -73,6 +73,24 @@ def _seed_target(c, *, target_id: str, state: str) -> None:
     )
 
 
+def _insert_policy_decision(c, target_id: str, decision: str) -> None:
+    """Insert one policy_decisions row through the write gate — copied from
+    tests/test_taskmaster.py's own fixture helper of the same name (test
+    files in this repo don't cross-import; see _seed_target's docstring
+    above for the precedent)."""
+    commit(
+        c, action="insert_policy_decision", table_name="policy_decisions",
+        record_id=new_id("pol"), payload={"decision": decision},
+        run_id="r0", step_id="s0", actor="system", agent_id="system",
+        sql="""INSERT INTO policy_decisions
+               (policy_decision_id, run_id, step_id, target_id, action, decision,
+                risk_level, reasons_json, matched_rules_json, missing_fields_json, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+        params=(new_id("pol"), "r0", "s0", target_id, "policy_check_phase1", decision,
+                "low", "[]", "[]", "[]"),
+    )
+
+
 def _advance(c, target_id: str, from_state: str, to_state: str) -> None:
     """One legal hop through the real state machine — never a raw UPDATE —
     so these tests exercise the exact same VALID_TRANSITIONS table the
@@ -124,9 +142,15 @@ def test_loop_calls_taskmaster_repeatedly_until_nothing_pending(scratch_db_targe
         try:
             if calls["n"] == 1:
                 # what resume_pending_research would have done: research
-                # the stuck target through to 'scored'.
+                # the stuck target through to 'scored'. A real research run
+                # always ends with policy_check_phase1 writing a
+                # policy_decisions row (app/agents/phase1.py's "policy_gate"
+                # node) before the target can be seen as scored -- the mock
+                # must write one too, or the H4 fix (has_allow_policy_decision)
+                # would fail-closed and read this target as not draft-eligible.
                 _advance(c, "tgt_1", "new", "researched")
                 _advance(c, "tgt_1", "researched", "scored")
+                _insert_policy_decision(c, "tgt_1", "allow")
             elif calls["n"] == 2:
                 # what draft_for_scored would have done: draft it, landing
                 # at the human-review gate.
@@ -150,6 +174,33 @@ def test_loop_calls_taskmaster_repeatedly_until_nothing_pending(scratch_db_targe
     row = conn.execute("SELECT state FROM targets WHERE target_id='tgt_1';").fetchone()
     assert row["state"] == "awaiting_review"
     conn.close()
+
+
+def test_permanently_policy_denied_target_does_not_reloop_to_the_bound(scratch_db_target, capsys):
+    """The bug reported live 2026-09-01 (ticket H4): a target sitting at
+    'scored' with a policy_denied decision stays in state='scored' forever
+    -- a refusal is not a state transition, by design, so it must surface
+    to the operator rather than silently vanish from selection. Before this
+    fix, _pending_count counted that target as draft-eligible purely by
+    state, so the stopping check never went to zero and the loop burned
+    every iteration up to --max-iterations re-discovering the same refusal.
+    After the fix, has_allow_policy_decision excludes it from the pending
+    count -- the PRE-loop check (before any taskmaster_main call is even
+    made) already reads zero, so the loop reports done without spending a
+    single Gemini call re-discovering a refusal that already happened."""
+    conn = _conn(scratch_db_target)
+    _seed_target(conn, target_id="tgt_1", state="scored")
+    _insert_policy_decision(conn, "tgt_1", "deny")
+    conn.close()
+
+    with patch("app.autonomous_taskmaster.taskmaster_main") as mock_main:
+        exit_code = main(["--db", scratch_db_target, "--max-iterations", "30"])
+
+    mock_main.assert_not_called()  # not 30 calls, not even 1 -- policy_denied is recognised as unwinnable before the loop starts
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "AUTONOMOUS RUN COMPLETE" in out
+    assert "nothing was pending at start" in out
 
 
 def test_bound_exceeded_stops_and_returns_1(scratch_db_target, capsys):

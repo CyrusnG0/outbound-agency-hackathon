@@ -1194,6 +1194,33 @@ def _record_draft_refusal(conn, *, target_id: str, run_id: str, outcome: str) ->
     return outcome
 
 
+def has_allow_policy_decision(conn, target_id: str) -> bool:
+    """True iff `target_id`'s LATEST policy_decisions row is decision="allow".
+
+    Extracted out of run_target_through_draft_async's precondition 2 below
+    so "which row is latest, what counts as allow" has exactly one source
+    of truth. app/autonomous_taskmaster.py's stopping check also calls this
+    (2026-09-01, ticket H4) — without it, that loop counted a target as
+    still "draft-eligible" purely by state='scored', which stays true
+    forever for a policy_denied target (a refusal is not a state
+    transition), so the loop kept re-attempting an unwinnable draft every
+    iteration up to the full --max-iterations bound instead of recognising
+    "nothing left it can do" after the first refusal.
+
+    No row at all is fail-closed (False), matching docs/tool-registry.md's
+    "an unmapped action always resolves to deny." The ordering key is
+    insert_seq DESC, not created_at: created_at is second-precision TEXT,
+    so two same-second rows order arbitrarily — ticket B5's ordering bug,
+    closed by insert_seq (see the call site below for the full history).
+    """
+    policy_row = conn.execute(
+        "SELECT decision FROM policy_decisions WHERE target_id=? "
+        "ORDER BY insert_seq DESC, created_at DESC LIMIT 1;",
+        (target_id,),
+    ).fetchone()
+    return policy_row is not None and policy_row["decision"] == "allow"
+
+
 def select_draft_eligible_targets(conn, *, limit: int) -> list[str]:
     """The draft stage's eligible set — the union ticket E1 makes it:
 
@@ -1336,18 +1363,11 @@ async def run_target_through_draft_async(
     # fresh decision, and only the LATEST one counts.  No row at all → fail
     # closed (the docs' rule: an unmapped action always resolves to deny; a
     # target with no recorded policy decision is not allowed to draft).
-    # The ordering key is insert_seq DESC, not created_at: created_at is
-    # second-precision TEXT, so two same-second rows order arbitrarily.
-    # Ticket B5 made that hazard OPERATIONAL (its send gate resolved the
-    # wrong review decision on correct data), so the monotonic insert_seq
-    # column now breaks the tie deterministically — created_at remains as
-    # the last-resort tiebreaker for legacy rows that predate the column.
-    policy_row = conn.execute(
-        "SELECT decision FROM policy_decisions WHERE target_id=? "
-        "ORDER BY insert_seq DESC, created_at DESC LIMIT 1;",
-        (target_id,),
-    ).fetchone()
-    if policy_row is None or policy_row["decision"] != "allow":
+    # has_allow_policy_decision (above) is the one place this "latest row,
+    # insert_seq DESC" query lives — app/autonomous_taskmaster.py's
+    # stopping check reads the same function so it never drifts from what
+    # this precondition actually enforces (ticket H4).
+    if not has_allow_policy_decision(conn, target_id):
         return _record_draft_refusal(conn, target_id=target_id, run_id=run_id, outcome="policy_denied")
     # ── Precondition 3 (follow-up only): the per-thread cap ──────────────
     # Count the ("routed" → "drafted") hops already recorded for this
