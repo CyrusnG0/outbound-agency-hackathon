@@ -173,10 +173,20 @@
      ids ever produce a link. -->
 <h2>Trace log</h2>
 {% set run_ids = steps | map(attribute='run_id') | select | unique | list %}
+<!-- static_mode (freeze script only): /run/{id} is credential-walled with
+     no static equivalent EXCEPT the one run frozen at /test-run/run
+     (static_frozen_run_id) — filter run_ids down to just that one (if it's
+     even among this target's runs) BEFORE the existing loop below, rather
+     than rendering a dead link for every other run_id on a frozen page.
+     Live mode (static_mode unset) keeps every run_id, unchanged. -->
+{% if static_mode %}
+{% set run_ids = run_ids | select("equalto", static_frozen_run_id) | list %}
+{% endif %}
 {% if run_ids %}
 <!-- U2 entry point: one link per distinct run_id on this page, pointing at
-     the live run view for that run. -->
-<p class="muted">{% for rid in run_ids %}<a href="/run/{{ rid }}">Watch this run live</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+     the live run view for that run — or, in static_mode, the one frozen
+     run view, since run_ids was already filtered to just that id above. -->
+<p class="muted">{% for rid in run_ids %}{% if static_mode %}<a href="/test-run/run">Watch this run live</a>{% else %}<a href="/run/{{ rid }}">Watch this run live</a>{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</p>
 {% endif %}
 {% if steps %}
 {% for step in steps %}

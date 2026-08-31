@@ -65,7 +65,17 @@
        control, verified in app/console/app.py): LLM output derived from
        scraped web pages renders as inert text, never as executable markup. -->
   <header class="site-header">
+    <!-- static_mode (set ONLY by scripts/freeze_public_snapshot.py, never by
+         a live route — the same convention run.html's static_steps_url
+         established): the logo's live target is "/", which is behind the
+         operator credential wall. A judge clicking the logo from a frozen
+         public page must land somewhere that still works with zero
+         credentials, so static pages point it at /test-run instead. -->
+    {% if static_mode %}
+    <a href="/test-run">Outbound Agency Console</a>
+    {% else %}
     <a href="/">Outbound Agency Console</a>
+    {% endif %}
     <!-- B4b: the badge no longer claims read-only — the console has exactly
          ONE write door (the review gate in app/review.py, plus the
          kill-switch toggle).  Everything else is still SELECT-only. -->
@@ -84,7 +94,14 @@
          comment for why this page is static text, not a live query. -->
     <a href="/rules" style="margin-left: auto;">Rules</a>
     <a href="/demo">Demo</a>
+    <!-- The review queue is an operator worklist with no static equivalent —
+         a decision requires a live write path by definition. Showing the
+         link on a frozen page would be a dead end into the credential wall,
+         so static_mode omits it entirely rather than link somewhere that
+         cannot work. -->
+    {% if not static_mode %}
     <a href="/review/queue">Review queue<span id="review-queue-count" class="review-queue-badge" hidden></span></a>
+    {% endif %}
   </header>
   <!-- D3a: the seeded-database indicator.  demo_data is passed by the
        routes that set it; templates that don't receive it render nothing
@@ -108,6 +125,12 @@
   {% block content %}{% endblock %}
   </main>
 
+  {% if not static_mode %}
+  <!-- static_mode: this whole script targets #review-queue-count, which
+       does not exist on a frozen page (the nav link above is omitted
+       there) — and it would poll a credential-walled endpoint every 10s
+       from a page that is supposed to open zero live connections. Skipped
+       entirely rather than left to fail silently forever. -->
   <script>
     (function () {
       "use strict";
@@ -177,5 +200,6 @@
       poll();
     })();
   </script>
+  {% endif %}
 </body>
 </html>

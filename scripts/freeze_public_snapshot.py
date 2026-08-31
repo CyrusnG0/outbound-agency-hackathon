@@ -209,6 +209,45 @@ def _freeze_all(conn) -> dict[str, bytes]:
 
     files: dict[str, bytes] = {}
 
+    # ── static_mode / static_target_slugs / static_frozen_run_id ─────────────
+    # Every template below extends base.html and several of them (demo.html,
+    # targets.html, target_detail.html) link to /targets/{id}, /review/{id},
+    # or /run/{id} on the live console — all three are behind the operator
+    # credential wall.  A judge clicking ANY of those links from a frozen
+    # /demo or /test-run page would hit a login prompt, defeating the entire
+    # point of a zero-credential public surface (found live, 2026-08-31: the
+    # targets.html target-id link did exactly this).  static_mode=True is
+    # passed to EVERY render below so base.html's nav (logo, review-queue
+    # link, the review-queue poll script) and each page's own body links
+    # switch to their frozen equivalents — or, where no frozen equivalent
+    # exists (the live review-decision screen, a run_id that isn't the one
+    # frozen run), omit the link entirely rather than point at a dead end.
+    # static_target_slugs maps each showcase target's real target_id to its
+    # /test-run/<slug> path, built ONCE here (not re-derived per template) so
+    # every page that could link to a showcase target's audit trail agrees
+    # on the exact same slug the file names on disk actually use.
+    # target_id_by_name is kept alongside static_target_slugs (rather than
+    # re-deriving it via _find_target_id a second time in step 3 below) so
+    # the two dicts can never resolve a company name to two different ids —
+    # one _find_target_id call per showcase company, total, for this whole
+    # function.
+    target_id_by_name: dict[str, str] = {}
+    static_target_slugs: dict[str, str] = {}
+    for company_name, _why in _SHOWCASE_TARGETS:
+        target_id = _find_target_id(conn, company_name)
+        if target_id is None:
+            raise RuntimeError(
+                f"showcase target {company_name!r} not found in the database "
+                f"— cannot freeze its detail page (freezing nothing)"
+            )
+        target_id_by_name[company_name] = target_id
+        static_target_slugs[target_id] = _slugify(company_name)
+    # Resolved once, up front, because target_detail.html (step 3 below) also
+    # needs it to decide which of a target's own run_ids (if any) is the one
+    # actually frozen at /test-run/run — previously this was only computed
+    # after the per-target loop (step 4), too late for the loop to use it.
+    static_frozen_run_id = _find_solacetree_run_id(conn)
+
     # 1. demo.html — the EXACT payload _fetch_demo_showcase builds.
     payload = _fetch_demo_showcase(conn)
     files["demo.html"] = _render("demo.html", {
@@ -217,6 +256,8 @@ def _freeze_all(conn) -> dict[str, bytes]:
         "meeting_draft": payload["meeting_draft"],
         "demo_data": demo_data,
         "replay_mode": replay_mode,
+        "static_mode": True,
+        "static_target_slugs": static_target_slugs,
     }).encode("utf-8")
 
     # 2. test_run_index.html — targets.html filtered to ONLY the four
@@ -242,18 +283,15 @@ def _freeze_all(conn) -> dict[str, bytes]:
         "targets": [dict(row) for row in rows],
         "demo_data": demo_data,
         "replay_mode": replay_mode,
+        "static_mode": True,
+        "static_target_slugs": static_target_slugs,
     }).encode("utf-8")
 
     # 3. test_run_target_<slug>.html — one full audit-trail page per showcase
     #    target, rendered the EXACT way the live /targets/{id} route renders
     #    it (same _fetch_target_detail + _pretty_json display-step transform).
     for company_name, _why in _SHOWCASE_TARGETS:
-        target_id = _find_target_id(conn, company_name)
-        if target_id is None:
-            raise RuntimeError(
-                f"showcase target {company_name!r} not found in the database "
-                f"— cannot freeze its detail page (freezing nothing)"
-            )
+        target_id = target_id_by_name[company_name]
         detail = _fetch_target_detail(conn, target_id)
         if detail is None:
             raise RuntimeError(
@@ -271,15 +309,22 @@ def _freeze_all(conn) -> dict[str, bytes]:
         ]
         files[f"test_run_target_{_slugify(company_name)}.html"] = _render(
             "target_detail.html",
-            {**detail, "steps": display_steps, "demo_data": demo_data, "replay_mode": replay_mode},
+            {
+                **detail, "steps": display_steps, "demo_data": demo_data, "replay_mode": replay_mode,
+                "static_mode": True,
+                "static_target_slugs": static_target_slugs,
+                "static_frozen_run_id": static_frozen_run_id,
+            },
         ).encode("utf-8")
 
     # 4. The run tied to Solacetree's real scheduled meeting: dump the exact
     #    JSON the live API returns (via _fetch_run_steps — the function behind
     #    GET /api/run/{run_id}/steps), and render run.html for the same run
     #    with static_steps_url set so the frozen page loads the frozen JSON
-    #    once instead of polling the DB-backed live API.
-    run_id = _find_solacetree_run_id(conn)
+    #    once instead of polling the DB-backed live API.  static_frozen_run_id
+    #    IS this run_id (resolved once, above) — kept as a separate local
+    #    name here only for readability at the call site.
+    run_id = static_frozen_run_id
     run_steps = _fetch_run_steps(conn, run_id)
     files["test_run_steps.json"] = json.dumps(
         run_steps.model_dump(), indent=2, ensure_ascii=False
@@ -289,6 +334,7 @@ def _freeze_all(conn) -> dict[str, bytes]:
         "demo_data": demo_data,
         "replay_mode": replay_mode,
         "static_steps_url": _STATIC_STEPS_URL,
+        "static_mode": True,
     }).encode("utf-8")
 
     return files

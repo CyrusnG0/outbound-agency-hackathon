@@ -32,8 +32,18 @@
       <td>{{ s.state if s.state is not none else "—" }}</td>
       <td>{{ s.why }}</td>
       <td>
+        <!-- static_target_slugs (set ONLY by the freeze script): both the
+             live /review/{id} (a write-capable operator screen with no
+             static equivalent at all) and /targets/{id} are behind the
+             credential wall. A frozen page always has the read-only audit
+             trail available for its four showcase targets, so static mode
+             prefers that over either live link — showing the real research/
+             score/draft history is strictly more useful to a judge than a
+             dead end, even for a target still awaiting review. -->
         {% if s.target_id is none %}
         <span class="empty">not available in this database</span>
+        {% elif static_target_slugs and s.target_id in static_target_slugs %}
+        <a href="/test-run/{{ static_target_slugs[s.target_id] }}">Open audit trail →</a>
         {% elif s.state == "awaiting_review" %}
         <a href="/review/{{ s.target_id }}">Open review →</a>
         {% else %}
@@ -81,7 +91,20 @@
 <pre>{{ meeting_draft.body }}</pre>
 <h3>Footer (deterministic — not authored by the model)</h3>
 <pre>{{ meeting_draft.footer }}</pre>
+<!-- Same static_target_slugs substitution as the showcase table above.
+     "The most recently reserved meeting" (app/console/app.py) is not
+     always one of the four showcase targets — a later batch can book a
+     newer meeting for a target outside the frozen set. When that
+     happens there IS no static substitute (unlike the showcase table,
+     which always has one), so static_mode omits the link entirely
+     rather than fall back to the live, credential-walled /review/{id} —
+     the same "omit, never dead-end" rule the trace-log run links and the
+     nav's Review queue link already follow. -->
+{% if static_target_slugs and meeting.target_id in static_target_slugs %}
+<p class="muted">Full draft diff across every revision, plus the critique that produced this one: <a href="/test-run/{{ static_target_slugs[meeting.target_id] }}">open the audit trail</a>.</p>
+{% elif not static_mode %}
 <p class="muted">Full draft diff across every revision, plus the critique that produced this one: <a href="/review/{{ meeting.target_id }}">open the review screen</a>.</p>
+{% endif %}
 {% else %}
 <p class="empty">No follow-up draft found for this meeting's target.</p>
 {% endif %}

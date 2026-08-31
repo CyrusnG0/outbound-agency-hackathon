@@ -21,7 +21,15 @@
   <tbody>
   {% for t in targets %}
     <tr>
+      <!-- static_target_slugs (set ONLY by scripts/freeze_public_snapshot.py
+           for the four /test-run showcase targets): the live target id
+           links to /targets/{id}, which is behind the credential wall — a
+           frozen page must link to the frozen audit-trail page instead. -->
+      {% if static_target_slugs and t.target_id in static_target_slugs %}
+      <td><a href="/test-run/{{ static_target_slugs[t.target_id] }}"><code>{{ t.target_id }}</code></a></td>
+      {% else %}
       <td><a href="/targets/{{ t.target_id }}"><code>{{ t.target_id }}</code></a></td>
+      {% endif %}
       <td>{{ t.company_name }}</td>
       <td>{{ t.offer_slug }}</td>
       <td>{{ t.state }}</td>
