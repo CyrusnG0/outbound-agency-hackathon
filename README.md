@@ -211,6 +211,18 @@ OUTBOUND_DB_TARGET=data/outbound.db uvicorn app.console.app:app --port 8080
 The console needs `OUTBOUND_CONSOLE_API_KEY` set (any value locally) and reads it via the
 `X-Internal-API-Key` header or HTTP Basic auth.
 
+Or drive the same pipeline through the bounded autonomous loop instead of the two stage CLIs —
+useful when a batch is large enough to outrun one `taskmaster_cli` call's 600s ceiling:
+
+```bash
+python -m app.autonomous_taskmaster --db data/outbound.db \
+  --task "There are targets stuck at state new from a previous run. Resume them and draft outreach for the ones that get scored."
+```
+
+It calls `taskmaster_cli` repeatedly and stops on its own once nothing is left `new` or
+draft-eligible — still capped by `--max-iterations` (default 30), still stopping at the human
+approval gate exactly like a single invocation does.
+
 ## Deploy to Google Cloud
 
 ```bash
