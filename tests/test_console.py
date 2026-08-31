@@ -403,7 +403,8 @@ def test_api_unknown_target_is_404(client):
 
 def test_demo_page_degrades_cleanly_when_no_showcase_names_match(db_path):
     # The base db_path fixture seeds "Acme Therapeutics", not any of the
-    # four hardcoded showcase company names — this proves the
+    # showcase company names (27 as of 2026-09-01's full-batch expansion,
+    # app/console/app.py's _SHOWCASE_TARGETS) — this proves the
     # mark-don't-drop path: a showcase name absent from the database
     # renders an explicit "not available" cell instead of a KeyError/500,
     # and the meeting/draft sections render their own explicit empty
@@ -424,7 +425,7 @@ def test_demo_page_degrades_cleanly_when_no_showcase_names_match(db_path):
         demo_data=False,
         replay_mode=False,
     )
-    assert html.count("not available in this database") == 4
+    assert html.count("not available in this database") == 27
     assert "No meeting reserved in this database yet" in html
     assert "No follow-up draft found for this meeting's target" in html
 
@@ -526,8 +527,8 @@ def test_demo_page_shows_real_showcase_links_and_scheduled_meeting(db_path):
     assert "We&#39;ve held" in html or "We've held" in html
     # The removed artifact link must never resurface anywhere on this page.
     assert "claude.ai" not in html
-    # Three showcase names still don't resolve in this database.
-    assert html.count("not available in this database") == 3
+    # 26 showcase names still don't resolve in this database (27 total, 1 seeded above).
+    assert html.count("not available in this database") == 26
 
 
 def test_demo_page_no_longer_lists_mark_boyden_associates(db_path):

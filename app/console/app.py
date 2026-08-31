@@ -364,6 +364,99 @@ _SHOWCASE_TARGETS = [
         "re-validated by code, and written through the same write gate as "
         "every other core-table row in this system.",
     ),
+
+    (
+        "CrewAI",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Glean",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Harvey",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "LangChain",
+        "Crashed mid-pipeline and was logged 'failed' rather than silently disappearing — the per-target crash isolation this build added holds here.",
+    ),
+    (
+        "LlamaIndex",
+        "A human approved this one through the real console — one step from a DRY_RUN send.",
+    ),
+    (
+        "Mastra",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Perplexity",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Replit",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Sierra",
+        "Crashed mid-pipeline and was logged 'failed' rather than silently disappearing — the per-target crash isolation this build added holds here.",
+    ),
+    (
+        "Zapier",
+        "Reached 'scored' in the ai-security batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Central Health Medical Practice",
+        "Landed on the watchlist — not a clear fit, not a clear miss; the state machine's deliberate 'come back to this' holding pattern.",
+    ),
+    (
+        "Central Minds Psychology & Therapy Clinic",
+        "Crashed mid-pipeline and was logged 'failed' rather than silently disappearing — the per-target crash isolation this build added holds here.",
+    ),
+    (
+        "Healing Minds",
+        "Reached 'scored' in the therapy-app batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Hong Kong Psychological Counselling Center",
+        "Reached 'scored' in the therapy-app batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Inner Compass Psychotherapy and Trauma Practice",
+        "A real draft is sitting at the human approval gate right now, waiting on an operator decision.",
+    ),
+    (
+        "Lifespan Counselling",
+        "A real draft is sitting at the human approval gate right now, waiting on an operator decision.",
+    ),
+    (
+        "Lo Chan Marriage and Family Therapist",
+        "Landed on the watchlist — not a clear fit, not a clear miss; the state machine's deliberate 'come back to this' holding pattern.",
+    ),
+    (
+        "MindWorX Clinic (OT&P Healthcare)",
+        "The judge or the formula ruled this one out — a real, explicit 'no', not a quiet exclusion.",
+    ),
+    (
+        "Momentum Counselling",
+        "Crashed mid-pipeline and was logged 'failed' rather than silently disappearing — the per-target crash isolation this build added holds here.",
+    ),
+    (
+        "Oasis Hong Kong Centre for Counselling & Psychotherapy",
+        "Reached 'scored' in the therapy-app batch — the deterministic formula and the LLM judge both weighed in; not yet drafted.",
+    ),
+    (
+        "Renewed Edge",
+        "Crashed mid-pipeline and was logged 'failed' rather than silently disappearing — the per-target crash isolation this build added holds here.",
+    ),
+    (
+        "Therapy Partners",
+        "A real draft is sitting at the human approval gate right now, waiting on an operator decision.",
+    ),
+    (
+        "Winnie Chiu Family Therapy",
+        "Landed on the watchlist — not a clear fit, not a clear miss; the state machine's deliberate 'come back to this' holding pattern.",
+    ),
 ]
 
 
@@ -1178,6 +1271,122 @@ def create_app() -> FastAPI:
     def test_run_target_solacetree() -> Response:
         # One showcase target's full audit trail, frozen by the script.
         return _serve_static_snapshot("test_run_target_solacetree-counselling-limited.html")
+
+
+    @app.get("/test-run/crewai")
+    def test_run_target_crewai() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_crewai.html")
+
+    @app.get("/test-run/glean")
+    def test_run_target_glean() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_glean.html")
+
+    @app.get("/test-run/harvey")
+    def test_run_target_harvey() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_harvey.html")
+
+    @app.get("/test-run/langchain")
+    def test_run_target_langchain() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_langchain.html")
+
+    @app.get("/test-run/llamaindex")
+    def test_run_target_llamaindex() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_llamaindex.html")
+
+    @app.get("/test-run/mastra")
+    def test_run_target_mastra() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_mastra.html")
+
+    @app.get("/test-run/perplexity")
+    def test_run_target_perplexity() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_perplexity.html")
+
+    @app.get("/test-run/replit")
+    def test_run_target_replit() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_replit.html")
+
+    @app.get("/test-run/sierra")
+    def test_run_target_sierra() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_sierra.html")
+
+    @app.get("/test-run/zapier")
+    def test_run_target_zapier() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_zapier.html")
+
+    @app.get("/test-run/central-health-medical-practice")
+    def test_run_target_central_health_medical_practice() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_central-health-medical-practice.html")
+
+    @app.get("/test-run/central-minds-psychology-therapy-clinic")
+    def test_run_target_central_minds_psychology_therapy_clinic() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_central-minds-psychology-therapy-clinic.html")
+
+    @app.get("/test-run/healing-minds")
+    def test_run_target_healing_minds() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_healing-minds.html")
+
+    @app.get("/test-run/hong-kong-psychological-counselling-center")
+    def test_run_target_hong_kong_psychological_counselling_center() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_hong-kong-psychological-counselling-center.html")
+
+    @app.get("/test-run/inner-compass-psychotherapy-and-trauma-practice")
+    def test_run_target_inner_compass_psychotherapy_and_trauma_practice() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_inner-compass-psychotherapy-and-trauma-practice.html")
+
+    @app.get("/test-run/lifespan-counselling")
+    def test_run_target_lifespan_counselling() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_lifespan-counselling.html")
+
+    @app.get("/test-run/lo-chan-marriage-and-family-therapist")
+    def test_run_target_lo_chan_marriage_and_family_therapist() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_lo-chan-marriage-and-family-therapist.html")
+
+    @app.get("/test-run/mindworx-clinic-ot-p-healthcare")
+    def test_run_target_mindworx_clinic_ot_p_healthcare() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_mindworx-clinic-ot-p-healthcare.html")
+
+    @app.get("/test-run/momentum-counselling")
+    def test_run_target_momentum_counselling() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_momentum-counselling.html")
+
+    @app.get("/test-run/oasis-hong-kong-centre-for-counselling-psychotherapy")
+    def test_run_target_oasis_hong_kong_centre_for_counselling_psychotherapy() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_oasis-hong-kong-centre-for-counselling-psychotherapy.html")
+
+    @app.get("/test-run/renewed-edge")
+    def test_run_target_renewed_edge() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_renewed-edge.html")
+
+    @app.get("/test-run/therapy-partners")
+    def test_run_target_therapy_partners() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_therapy-partners.html")
+
+    @app.get("/test-run/winnie-chiu-family-therapy")
+    def test_run_target_winnie_chiu_family_therapy() -> Response:
+        # One showcase target's full audit trail, frozen by the script.
+        return _serve_static_snapshot("test_run_target_winnie-chiu-family-therapy.html")
 
     @app.get("/test-run/run")
     def test_run_run() -> Response:
