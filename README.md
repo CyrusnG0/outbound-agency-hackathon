@@ -131,9 +131,6 @@ built. A learning loop without its guardrails is worse than no learning loop at 
   <img src="architecture/diagram-3-governance-spine.png" width="720" alt="Governance spine diagram">
 </p>
 <p align="center">
-  <img src="architecture/diagram-2a-pipeline-happy-path.png" width="720" alt="Pipeline happy path diagram">
-</p>
-<p align="center">
   <img src="architecture/diagram-2b-exceptions-terminal.png" width="720" alt="Exceptions &amp; terminal states diagram">
 </p>
 
