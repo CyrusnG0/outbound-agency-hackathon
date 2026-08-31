@@ -38,6 +38,14 @@ and a deterministic router that suppresses, escalates, or queues a follow-up —
 reply was positive, includes a **real reserved slot on a real computed calendar**, picked by
 another LLM agent and re-validated by code before it's ever booked.
 
+A per-invocation wall-clock ceiling means one `taskmaster_cli` call can outrun a large batch
+mid-research. `python -m app.autonomous_taskmaster` is a bounded outer loop for exactly that:
+it calls the same unmodified CLI repeatedly and, after each call, decides whether to call it
+again by reading the same deterministic functions the stage tools already use to pick their own
+work — never by trusting the model's own "am I done" claim. `--max-iterations` (default 30)
+keeps it honestly bounded rather than looping forever; it adds no new tool and no new write
+path, and it still stops at the human approval gate exactly like a single invocation does.
+
 ## The design rule
 
 One sentence, enforced by construction everywhere in this codebase:
@@ -140,7 +148,7 @@ built. A learning loop without its guardrails is worse than no learning loop at 
   handled transparently.
 - **Google Cloud Run** — hosts the read-only operator console (FastAPI + Jinja2).
 - **Pydantic** — every LLM input/output is a typed, validated schema; no free-form JSON parsing.
-- **pytest** — 810 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
+- **pytest** — 813 tests, 8 skipped (live-Postgres tests that skip without cloud credentials).
 
 ## Data sources
 
@@ -192,7 +200,7 @@ tries to construct a real client):
 pytest -q
 ```
 
-Expect `810 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
+Expect `813 passed, 8 skipped`. The 8 skips are live-Postgres tests that skip without
 `OUTBOUND_TEST_DB_TARGET` set.
 
 Run the pipeline against the bundled example targets (SQLite, no cloud needed):
